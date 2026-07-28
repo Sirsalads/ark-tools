@@ -41,6 +41,11 @@ class MacroEngine(QThread):
         self._drop_requested = True
 
     # ----------------------------------------------------------- helpers
+    def _wait(self, milliseconds: int) -> bool:
+        """A drop-routine wait, plus the streaming round trip if there is one."""
+        return self._sleep((milliseconds + self.cfg.target.stream_latency_ms)
+                           / 1000.0)
+
     def _sleep(self, seconds: float) -> bool:
         """Sleep in slices. Returns False if a stop was requested midway."""
         end = time.perf_counter() + seconds
@@ -138,7 +143,7 @@ class MacroEngine(QThread):
 
         # 1) open the inventory
         self._tap_key(d.inventory_key)
-        if not self._sleep(d.open_wait_ms / 1000.0):
+        if not self._wait(d.open_wait_ms):
             return
 
         for template in templates:
@@ -148,14 +153,14 @@ class MacroEngine(QThread):
 
             # 2) focus the filter field and wipe whatever was there
             self._click_point(d.filter_point, "filter field")
-            if not self._sleep(0.20):
+            if not self._wait(200):
                 return
             self._backspaces(d.clear_backspaces)
 
             # 3) type the keyword and let the list settle
             self._type(keyword)
             self.log.emit(f'filtering "{keyword}"', "info")
-            if not self._sleep(d.after_type_wait_ms / 1000.0):
+            if not self._wait(d.after_type_wait_ms):
                 return
 
             # 4) Drop All — with the filter on, only what is listed falls
@@ -167,20 +172,20 @@ class MacroEngine(QThread):
                     return
             else:
                 self._click_point(d.dropall_point, "Drop All")
-                if not self._sleep(d.after_drop_wait_ms / 1000.0):
+                if not self._wait(d.after_drop_wait_ms):
                     return
 
         # 5) clear the filter so the inventory is not left masked
         self._click_point(d.filter_point, "filter field")
-        if not self._sleep(0.20):
+        if not self._wait(200):
             return
         self._backspaces(d.clear_backspaces)
 
         # 6) close the inventory
-        if not self._sleep(0.25):
+        if not self._wait(250):
             return
         self._tap_key("esc" if d.close_with == "esc" else d.inventory_key)
-        if not self._sleep(d.close_wait_ms / 1000.0):
+        if not self._wait(d.close_wait_ms):
             return
 
         self.drops += 1

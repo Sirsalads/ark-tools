@@ -295,4 +295,45 @@ assert Config.load(target).drop.templates, "saved config did not round-trip"
 target.unlink()
 print("OK  saving stages and renames, leaving no partial file")
 
+# ------------------------------------------- 13) streaming latency allowance
+timed = Config()
+timed.target.require_focus = False
+timed.drop.filter_point = [10, 10]
+timed.drop.dropall_point = [20, 20]
+timed.drop.templates = [{"name": "T", "keyword": "thatch", "enabled": True}]
+timed.drop.clear_backspaces = 0
+for field_name in ("open_wait_ms", "close_wait_ms", "after_type_wait_ms",
+                   "after_drop_wait_ms"):
+    setattr(timed.drop, field_name, 0)
+
+calls.clear()
+native = eng.MacroEngine(timed)
+native.log.connect(lambda _m, _l: None)
+native._running = True
+start = time.perf_counter()
+native._run_drop()
+baseline = time.perf_counter() - start
+
+timed.target.stream_latency_ms = 120
+streamed = eng.MacroEngine(timed)
+streamed.log.connect(lambda _m, _l: None)
+streamed._running = True
+start = time.perf_counter()
+streamed._run_drop()
+with_stream = time.perf_counter() - start
+
+# one pass has 6 waits, so the allowance should add roughly 6 * 120ms
+added = with_stream - baseline
+assert 0.55 <= added <= 0.95, f"latency allowance added {added:.2f}s"
+print(f"OK  stream latency stretches every wait (+{added:.2f}s at 120ms)")
+
+# ------------------------------------------- 14) letterboxed video area
+assert ark_layout.video_area(0, 0, 1920, 1080) == (0, 0, 1920, 1080)
+# 16:10 window -> bars top and bottom
+assert ark_layout.video_area(100, 50, 1920, 1200) == (100, 110, 1920, 1080)
+# ultrawide window -> bars left and right
+assert ark_layout.video_area(0, 0, 2560, 1080) == (320, 0, 1920, 1080)
+assert ark_layout.video_area(0, 0, 0, 0) == (0, 0, 0, 0)
+print("OK  video area carves the picture out of the black bars")
+
 print("\nALL TESTS PASSED")

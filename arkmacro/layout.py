@@ -36,6 +36,25 @@ def suggest(width: int, height: int,
             _from_offset(DROPALL_OFFSET, width, height, origin))
 
 
+def video_area(x: int, y: int, width: int, height: int,
+               aspect: float = 16 / 9) -> tuple[int, int, int, int]:
+    """
+    The picture inside a streaming client window.
+
+    GeForce NOW renders the session at a fixed aspect ratio and letterboxes
+    whatever is left over. The HUD is anchored to that picture, not to the
+    window, so measuring the window would put every estimate off by half a
+    black bar.
+    """
+    if width <= 0 or height <= 0:
+        return x, y, width, height
+    if width / height > aspect:          # bars on the left and right
+        inner = round(height * aspect)
+        return x + (width - inner) // 2, y, inner, height
+    inner = round(width / aspect)        # bars on the top and bottom
+    return x, y + (height - inner) // 2, width, inner
+
+
 def rescale(point: list[int], src: list[int], dst: list[int]) -> list[int]:
     """Convert a point captured at `src` resolution to `dst`."""
     src_w, src_h = src

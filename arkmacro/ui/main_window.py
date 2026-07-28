@@ -145,6 +145,7 @@ class MainWindow(QWidget):
         self._silent_check = False
         self._picking = False
         self._applying_points = False
+        self._state = "idle"
 
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -155,14 +156,8 @@ class MainWindow(QWidget):
         self._build_ui()
         self._wire_autosave()
 
-        self.hotkeys = HotkeyManager()
-        self.hotkeys.triggered.connect(self._on_hotkey)
-        self.hotkeys.failed.connect(
-            lambda name, key: self._log(
-                f'could not register "{key}" for {name} — another program may '
-                "already own it", "err"))
-        self._apply_hotkeys()
-
+        # timers first: _apply_hotkeys pulls the widgets, and pulling arms the
+        # anti-afk timer
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._save)
@@ -170,6 +165,17 @@ class MainWindow(QWidget):
         self._start_ts = time.time()
         self._time_timer = QTimer(self)
         self._time_timer.timeout.connect(self._tick_time)
+
+        self._afk_timer = QTimer(self)
+        self._afk_timer.timeout.connect(self._afk_tick)
+
+        self.hotkeys = HotkeyManager()
+        self.hotkeys.triggered.connect(self._on_hotkey)
+        self.hotkeys.failed.connect(
+            lambda name, key: self._log(
+                f'could not register "{key}" for {name} — another program may '
+                "already own it", "err"))
+        self._apply_hotkeys()
 
         self._load_thumbs()
         self._refresh_points_status()
@@ -574,13 +580,20 @@ class MainWindow(QWidget):
         lay.addWidget(keys)
 
         target = Card("Target and delivery")
+        self.cb_platform = combo(["Native (installed game)", "GeForce NOW"],
+                                 0 if self.cfg.target.platform == "native" else 1,
+                                 width=230)
+        self.cb_platform.currentIndexChanged.connect(self._on_platform_changed)
         self.cb_mode = combo(["Foreground (recommended)", "Background (experimental)"],
                              0 if self.cfg.target.mode == "foreground" else 1,
                              width=230)
         self.cb_mode.currentIndexChanged.connect(self._sync_mode_note)
         mgrid = FormGrid(pairs=1)
+        mgrid.add("Where ARK runs", self.cb_platform)
         mgrid.add("Delivery mode", self.cb_mode)
         target.add(mgrid)
+        self.platform_note = hint_label("")
+        target.add(self.platform_note)
         self.mode_note = hint_label("")
         target.add(self.mode_note)
         target.add(Divider())
@@ -593,6 +606,12 @@ class MainWindow(QWidget):
         self.sp_delay = dspin(0, 30, self.cfg.target.start_delay_s, " s", 0.5)
         wgrid.add("Start delay", self.sp_delay,
                   "Time for you to get back into the game before the first click")
+        self.sp_latency = spin(0, 3000, self.cfg.target.stream_latency_ms,
+                               " ms", 25)
+        wgrid.add("Stream latency", self.sp_latency,
+                  "Added to every wait in the drop routine. Zero on an "
+                  "installed game; raise it until the cycle stops racing the "
+                  "video feed")
         target.add(wgrid)
 
         self.sw_focus = SwitchRow("Only click while the game is focused",
@@ -611,9 +630,35 @@ class MainWindow(QWidget):
         target.add(detect)
         lay.addWidget(target)
 
+        afk = Card("Anti-AFK",
+                   "A cloud session gets dropped when it sees no input for a "
+                   "while. This taps one key on a timer to keep it alive — "
+                   "F13 to F24 exist in the keyboard protocol but not on real "
+                   "keyboards, so ARK has nothing bound to them and the tick "
+                   "cannot touch the game.")
+        self.sw_afk = SwitchRow("Keep the session awake",
+                                self.cfg.anti_afk.enabled)
+        afk.add(self.sw_afk)
+        agrid = FormGrid(pairs=2)
+        self.sp_afk_interval = spin(5, 3600, self.cfg.anti_afk.interval_s,
+                                    " s", 15)
+        agrid.add("Tick every", self.sp_afk_interval)
+        self.ed_afk_key = QLineEdit(self.cfg.anti_afk.key)
+        self.ed_afk_key.setFixedWidth(124)
+        self.ed_afk_key.setAlignment(Qt.AlignCenter)
+        agrid.add("Key to tap", self.ed_afk_key,
+                  "Key name: f15, f16, scrolllock...")
+        afk.add(agrid)
+        afk.add(hint_label(
+            "It only ticks while the target window has focus, and never in the "
+            "middle of a drop pass. With the macro farming there is already "
+            "plenty of input, so this is what covers the gaps."))
+        lay.addWidget(afk)
+
         lay.addWidget(self._updates_card())
         lay.addStretch(1)
         self._sync_mode_note()
+        self._sync_platform_note()
         return page
 
     def _updates_card(self) -> Card:
@@ -676,7 +721,48 @@ class MainWindow(QWidget):
         self.lbl_clicks.setVisible(index == 1)
         self.sp_every_clicks.setVisible(index == 1)
 
+    @property
+    def _streaming(self) -> bool:
+        return self.cb_platform.currentIndex() == 1
+
+    def _on_platform_changed(self) -> None:
+        """Move the defaults that streaming actually changes, and say so."""
+        if self._streaming:
+            if self.ed_window.text().strip() in ("", "ARK"):
+                self.ed_window.setText("GeForce NOW")
+            if self.sp_latency.value() == 0:
+                self.sp_latency.setValue(250)
+            self._log("GeForce NOW: targeting the client window and adding "
+                      "250 ms to every wait — recapture your points, the HUD "
+                      "sits inside the video, not the window", "warn")
+        else:
+            if self.ed_window.text().strip() == "GeForce NOW":
+                self.ed_window.setText("ARK")
+            if self.sp_latency.value() == 250:
+                self.sp_latency.setValue(0)
+        self._sync_platform_note()
+        self._sync_mode_note()
+        self._on_change()
+
+    def _sync_platform_note(self) -> None:
+        if self._streaming:
+            self.platform_note.setText(
+                "The GeForce NOW client forwards your real mouse and keyboard "
+                "to the server, so foreground input works exactly as it does "
+                "on an installed game — just one round trip later. Point "
+                "estimates measure the video inside the window, ignoring the "
+                "black bars.")
+        else:
+            self.platform_note.setText(
+                "The game is installed and running on this machine.")
+
     def _sync_mode_note(self) -> None:
+        if self._streaming and self.cb_mode.currentIndex() == 1:
+            self.mode_note.setText(
+                "Background delivery cannot work through GeForce NOW: the "
+                "client captures real input and forwards it, and posted "
+                "messages never reach the stream. Use foreground.")
+            return
         if self.cb_mode.currentIndex() == 0:
             self.mode_note.setText(
                 "Sends real input (SendInput). Always works, but ARK has to be "
@@ -727,7 +813,9 @@ class MainWindow(QWidget):
             self.sp_dx, self.sp_dy, self.cb_mode, self.ed_window,
             self.sw_focus.switch, self.sp_delay, self.chk_unicode,
             self.hk_toggle, self.hk_drop, self.hk_panic, self.hk_pick,
-            self.sw_dry.switch, self.sw_updates.switch,
+            self.sw_dry.switch, self.sw_updates.switch, self.cb_platform,
+            self.sp_latency, self.sw_afk.switch, self.sp_afk_interval,
+            self.ed_afk_key,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -779,9 +867,17 @@ class MainWindow(QWidget):
         target = self.cfg.target
         target.mode = ("foreground" if self.cb_mode.currentIndex() == 0
                        else "background")
+        target.platform = "geforce_now" if self._streaming else "native"
         target.window_title = self.ed_window.text().strip() or "ARK"
         target.require_focus = self.sw_focus.switch.isChecked()
         target.start_delay_s = self.sp_delay.value()
+        target.stream_latency_ms = self.sp_latency.value()
+
+        afk = self.cfg.anti_afk
+        afk.enabled = self.sw_afk.switch.isChecked()
+        afk.interval_s = self.sp_afk_interval.value()
+        afk.key = self.ed_afk_key.text().strip().lower() or "f15"
+        self._sync_afk()
 
         keys = self.cfg.hotkeys
         keys.toggle = self.hk_toggle.text() or keys.toggle
@@ -863,7 +959,33 @@ class MainWindow(QWidget):
         self.tile_time.set_value(f"{elapsed // 60:02d}:{elapsed % 60:02d}")
 
     def _on_state(self, state: str) -> None:
+        self._state = state
         self.titlebar.status.set_state(state)
+
+    # -------------------------------------------------------------- anti-afk
+    def _sync_afk(self) -> None:
+        afk = self.cfg.anti_afk
+        if afk.enabled:
+            self._afk_timer.start(max(afk.interval_s, 5) * 1000)
+        else:
+            self._afk_timer.stop()
+
+    def _afk_tick(self) -> None:
+        """One harmless key, only when it cannot get in the way."""
+        if self._picking or self._state == "dropping":
+            return
+        vk = w.vk_from_name(self.cfg.anti_afk.key)
+        if vk is None:
+            self._log(f'anti-afk: "{self.cfg.anti_afk.key}" is not a key name',
+                      "err")
+            self._afk_timer.stop()
+            return
+        hwnd = w.find_window(self.cfg.target.window_title)
+        if not w.is_foreground(hwnd):
+            # typing into whatever the user is actually doing would be rude,
+            # and the stream would not see it anyway
+            return
+        w.tap(vk, hold=0.03)
 
     def _on_stats(self, clicks: int, drops: int) -> None:
         self.tile_clicks.set_value(f"{clicks:,}")
@@ -893,13 +1015,20 @@ class MainWindow(QWidget):
 
     # --------------------------------------------------------- game geometry
     def _game_area(self) -> tuple[int, int, int, int]:
-        """(x, y, width, height) of the game area, or of the primary monitor."""
+        """
+        (x, y, width, height) the HUD is anchored to.
+
+        On a streaming client that is the picture inside the window, not the
+        window itself — the black bars are not part of the game.
+        """
         hwnd = w.find_window(self.cfg.target.window_title)
         rect = w.client_rect(hwnd) if hwnd else None
-        if rect:
-            return rect
-        width, height = w.screen_size()
-        return 0, 0, width, height
+        if rect is None:
+            width, height = w.screen_size()
+            rect = (0, 0, width, height)
+        if self.cfg.target.platform == "geforce_now":
+            return ark_layout.video_area(*rect)
+        return rect
 
     def _suggest_points(self) -> None:
         x, y, width, height = self._game_area()
@@ -1263,6 +1392,7 @@ class MainWindow(QWidget):
 
     # --------------------------------------------------------------- close
     def closeEvent(self, event) -> None:
+        self._afk_timer.stop()
         self._stop_macro()
         if self._update_worker is not None:
             self._update_worker.wait(3000)

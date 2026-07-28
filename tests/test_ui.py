@@ -179,7 +179,7 @@ win.sp_dx.setValue(11)
 win._game_area = lambda: (8, 0, 891, 994)
 win._suggest_points()
 assert win.sp_fx.value() == 11, "an off-window estimate was applied anyway"
-win._game_area = lambda: (0, 0, 1920, 1080)
+del win._game_area          # back to the real method for later sections
 print("OK  estimate fills the fields, and refuses when it lands off-window")
 
 # points on a monitor left of the primary one are representable
@@ -321,6 +321,87 @@ print("OK  the macro refuses to arm while points are being picked")
 win._on_stats(1284, 3)
 assert win.tile_clicks.value.text() == "1,284", win.tile_clicks.value.text()
 print("OK  numbers use the app's own locale")
+
+# ------------------------------------------------- 18) GeForce NOW profile
+win.stack.setCurrentIndex(4)
+win.ed_window.setText("ARK")
+win.sp_latency.setValue(0)
+win.cb_platform.setCurrentIndex(1)          # GeForce NOW
+app.processEvents()
+assert win.cfg.target.platform == "geforce_now"
+assert win.ed_window.text() == "GeForce NOW", "did not retarget the client"
+assert win.cfg.target.stream_latency_ms == 250, "no latency allowance"
+assert "GeForce NOW" in win.platform_note.text()
+
+# background delivery is impossible through the stream, and it says so
+win.cb_mode.setCurrentIndex(1)
+app.processEvents()
+assert "cannot work through GeForce NOW" in win.mode_note.text()
+win.cb_mode.setCurrentIndex(0)
+
+# a hand-picked title and latency survive going back to native
+win.ed_window.setText("ArkAscended")
+win.sp_latency.setValue(180)
+win.cb_platform.setCurrentIndex(0)
+app.processEvents()
+assert win.cfg.target.platform == "native"
+assert win.ed_window.text() == "ArkAscended", "clobbered a custom title"
+assert win.cfg.target.stream_latency_ms == 180, "clobbered a custom latency"
+print("OK  GeForce NOW profile moves defaults without eating your edits")
+
+# ------------------------------------------------- 19) letterboxed geometry
+win.cb_platform.setCurrentIndex(1)
+win._pull()
+original_rect = (100, 50, 1920, 1200)       # a 16:10 client window
+w_module = sys.modules["arkmacro.winapi"]
+w_module.find_window = lambda _f: 7
+w_module.client_rect = lambda _h: original_rect
+# the picture is 16:9 inside it, so 60px of bar top and bottom
+assert win._game_area() == (100, 110, 1920, 1080), win._game_area()
+win.cb_platform.setCurrentIndex(0)
+win._pull()
+assert win._game_area() == original_rect, "native must use the whole window"
+print("OK  streaming measures the video, native measures the window")
+
+# ------------------------------------------------- 20) anti-afk guards
+taps: list[int] = []
+w_module.tap = lambda vk, hold=0.0: taps.append(vk)
+w_module.is_foreground = lambda _h: True
+win.sw_afk.switch.setChecked(True)
+win.ed_afk_key.setText("f15")
+win.sp_afk_interval.setValue(30)
+app.processEvents()
+assert win._afk_timer.isActive(), "enabling did not arm the timer"
+
+win._afk_tick()
+assert taps == [0x7E], f"F15 was not tapped: {taps}"
+
+# never in the middle of a drop pass, and never while picking points
+taps.clear()
+win._state = "dropping"
+win._afk_tick()
+win._state = "idle"
+win._picking = True
+win._afk_tick()
+win._picking = False
+assert taps == [], "ticked at a moment it should have stayed quiet"
+
+# nor into whatever else the user is doing
+w_module.is_foreground = lambda _h: False
+win._afk_tick()
+assert taps == [], "ticked while the game was not in front"
+w_module.is_foreground = lambda _h: True
+
+# a bad key name disarms instead of tapping nonsense forever
+win.ed_afk_key.setText("not-a-key")
+app.processEvents()
+win._afk_tick()
+assert taps == [] and not win._afk_timer.isActive()
+win.ed_afk_key.setText("f15")
+win.sw_afk.switch.setChecked(False)
+app.processEvents()
+assert not win._afk_timer.isActive(), "disabling did not stop the timer"
+print("OK  anti-afk taps a dead key, and only when it is safe to")
 
 win.hotkeys.stop()
 win.close()

@@ -137,15 +137,26 @@ def _scan(vk: int) -> int:
 
 
 def key_down(vk: int) -> None:
+    # keys with no scancode on this layout (F13-F24, for instance) have to go
+    # out as a virtual key, or the event carries scancode 0 and is dropped
+    scan = _scan(vk)
+    if not scan:
+        _send(INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(vk, 0, 0, 0, 0)))
+        return
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_EXTENDEDKEY if vk in _EXTENDED else 0)
-    _send(INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(0, _scan(vk), flags, 0, 0)))
+    _send(INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(0, scan, flags, 0, 0)))
 
 
 def key_up(vk: int) -> None:
+    scan = _scan(vk)
+    if not scan:
+        _send(INPUT(type=INPUT_KEYBOARD,
+                    ki=KEYBDINPUT(vk, 0, KEYEVENTF_KEYUP, 0, 0)))
+        return
     flags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
     if vk in _EXTENDED:
         flags |= KEYEVENTF_EXTENDEDKEY
-    _send(INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(0, _scan(vk), flags, 0, 0)))
+    _send(INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(0, scan, flags, 0, 0)))
 
 
 def tap(vk: int, hold: float = 0.035) -> None:

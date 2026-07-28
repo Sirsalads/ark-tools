@@ -146,6 +146,41 @@ Fired on a timer, on a click count, or by `F7`:
 5. repeat for every checked template, in list order;
 6. clear the filter, close the inventory, resume farming.
 
+## GeForce NOW
+
+**Settings → Where ARK runs → GeForce NOW.**
+
+The client forwards your real mouse and keyboard to the server, so foreground
+input works exactly as it does on an installed game — just one round trip
+later. Switching the profile does three things:
+
+- retargets the window title to the client (`GeForce NOW`);
+- adds a **250 ms stream latency** allowance to every wait in the drop routine,
+  so the cycle stops racing the video feed. Raise it if your connection is
+  worse; your own edits to the title or the latency are never overwritten;
+- measures the **video inside the window** instead of the window. The HUD is
+  anchored to the picture, so with black bars an estimate based on the window
+  would land half a bar off.
+
+**Recapture your points after switching** — and note that background delivery
+cannot work through the stream at all: the client captures real input, and
+posted messages never reach it. The app says so if you pick it anyway.
+
+## Anti-AFK
+
+**Settings → Anti-AFK.** Taps one key on a timer so a cloud session is not
+dropped for inactivity.
+
+- The default key is **F15**. F13–F24 exist in the keyboard protocol but not on
+  real keyboards, so ARK has nothing bound to them and the tick cannot touch
+  the game.
+- It ticks only while the target window has focus, and never during a drop pass
+  or while you are picking points.
+- While the macro is farming there is already plenty of input — this covers the
+  gaps: paused, waiting for focus, or stopped with the session still open.
+- If the game is not in front it stays quiet. Typing into whatever you are
+  actually doing would be rude, and the stream would not see it anyway.
+
 ## Foreground vs background
 
 | Mode | How it sends | Notes |

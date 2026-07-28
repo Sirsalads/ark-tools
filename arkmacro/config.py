@@ -61,9 +61,24 @@ class Hotkeys:
 @dataclass
 class Target:
     mode: str = "foreground"        # foreground | background
+    platform: str = "native"        # native | geforce_now
     window_title: str = "ARK"       # fragment of the game window title
     require_focus: bool = True      # only click while the game is focused
     start_delay_s: float = 2.0      # grace period before the first click
+    # streaming puts a round trip between every click and what you see, so
+    # every wait in the drop routine gets this much extra
+    stream_latency_ms: int = 0
+
+
+@dataclass
+class AntiAfk:
+    """Keeps a streaming session from being dropped for inactivity."""
+
+    enabled: bool = False
+    interval_s: int = 60
+    # F13-F24 exist in the keyboard protocol but not on real keyboards, so
+    # nothing in ARK is bound to them and the tick cannot affect the game
+    key: str = "f15"
 
 
 @dataclass
@@ -77,6 +92,7 @@ class Config:
     drop: DropRoutine = field(default_factory=DropRoutine)
     hotkeys: Hotkeys = field(default_factory=Hotkeys)
     target: Target = field(default_factory=Target)
+    anti_afk: AntiAfk = field(default_factory=AntiAfk)
     app: App = field(default_factory=App)
 
     # -------------------------------------------------------------- io
