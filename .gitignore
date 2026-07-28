@@ -1,0 +1,17 @@
+# runtime state, per machine
+config.json
+state/
+captures/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# editors / os
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

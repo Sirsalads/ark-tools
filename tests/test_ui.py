@@ -1,0 +1,233 @@
+"""
+Front-end tests: drive the real widgets and check the config that comes out.
+
+Runs offscreen, sends no input to the game:
+    python tests/test_ui.py
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+import tempfile
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QPixmap  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from arkmacro import config as config_module  # noqa: E402
+from arkmacro.config import Config  # noqa: E402
+from arkmacro.ui import icons  # noqa: E402
+from arkmacro.ui.backdrop import Backdrop, load_brand  # noqa: E402
+from arkmacro.ui.main_window import APP_NAME, MainWindow, NAV  # noqa: E402
+from arkmacro.ui.picker import ScreenPicker  # noqa: E402
+from arkmacro.ui.theme import QSS  # noqa: E402
+from arkmacro.ui.widgets import FormGrid, PresetDialog, TemplateEditor  # noqa: E402
+
+# keep the real config.json out of the way
+sandbox = pathlib.Path(tempfile.mkdtemp()) / "config.json"
+config_module.CONFIG_PATH = sandbox
+
+app = QApplication(sys.argv[:1])
+app.setStyleSheet(QSS)
+
+win = MainWindow()
+win.resize(1060, 760)
+win.show()
+app.processEvents()
+
+# ------------------------------------------------- 1) every page builds
+for index, (_glyph, name) in enumerate(NAV):
+    win.stack.setCurrentIndex(index)
+    app.processEvents()
+    page = win.stack.widget(index)
+    assert page.widget().sizeHint().width() <= 1060, \
+        f"page {name} is wider than the window and would clip"
+print(f"OK  {len(NAV)} pages build and fit")
+
+# ------------------------------------------------- 2) template editor
+editor: TemplateEditor = win.tpl_editor
+before = len(editor.templates())
+editor.name_edit.setText("Obsidian")
+editor.keyword_edit.setText("obsidian")
+editor._add()
+assert len(editor.templates()) == before + 1
+assert editor.templates()[-1] == {"name": "Obsidian", "keyword": "obsidian",
+                                  "enabled": True}
+
+# duplicates are refused
+editor.name_edit.setText("Dupe")
+editor.keyword_edit.setText("OBSIDIAN")
+editor._add()
+assert len(editor.templates()) == before + 1, "duplicate keyword got in"
+
+# rename the selected row, keeping its checked state
+win.stack.setCurrentIndex(2)
+editor.list.setCurrentRow(0)
+first_state = editor.templates()[0]["enabled"]
+editor.name_edit.setText("Renamed")
+editor.keyword_edit.setText("thatch")
+editor._update()
+assert editor.templates()[0]["name"] == "Renamed"
+assert editor.templates()[0]["enabled"] is first_state
+
+# reorder and remove
+editor.list.setCurrentRow(0)
+editor._move(1)
+assert editor.templates()[1]["name"] == "Renamed"
+editor.list.setCurrentRow(1)
+editor._remove()
+assert all(t["name"] != "Renamed" for t in editor.templates())
+print("OK  template add / dedupe / rename / reorder / remove")
+
+# unchecking a row reaches the config
+item = editor.list.item(0)
+item.setCheckState(Qt.Unchecked)
+app.processEvents()
+win._pull()
+assert win.cfg.drop.templates[0]["enabled"] is False
+assert all(t["enabled"] for t in win.cfg.drop.active_templates())
+print("OK  checkbox state flows into the config")
+
+# ------------------------------------------------- 3) preset dialog
+dialog = PresetDialog(set())
+checkable = [i for i in range(dialog.list.count())
+             if dialog.list.item(i).flags() & Qt.ItemIsUserCheckable]
+dialog.list.item(checkable[0]).setCheckState(Qt.Checked)
+picked = dialog.chosen()
+assert len(picked) == 1 and picked[0]["keyword"]
+# a header row must never be selectable
+headers = [i for i in range(dialog.list.count())
+           if not (dialog.list.item(i).flags() & Qt.ItemIsUserCheckable)]
+assert headers, "preset categories are missing"
+dialog.deleteLater()
+
+# already-owned keywords come back disabled
+owned = PresetDialog({"thatch"})
+row = next(i for i in range(owned.list.count())
+           if '"thatch"' in owned.list.item(i).text())
+assert owned.list.item(row).flags() == Qt.NoItemFlags
+owned.deleteLater()
+print("OK  preset dialog selection and duplicate guard")
+
+# ------------------------------------------------- 4) trigger visibility
+win.cb_trigger.setCurrentIndex(0)
+app.processEvents()
+assert win.sp_interval.isVisible() and win.lbl_interval.isVisible()
+assert not win.sp_every_clicks.isVisible() and not win.lbl_clicks.isVisible()
+win.cb_trigger.setCurrentIndex(1)
+app.processEvents()
+assert win.sp_every_clicks.isVisible() and win.lbl_clicks.isVisible()
+assert not win.sp_interval.isVisible() and not win.lbl_interval.isVisible()
+win.cb_trigger.setCurrentIndex(2)
+app.processEvents()
+assert not win.sp_interval.isVisible() and not win.sp_every_clicks.isVisible()
+print("OK  trigger fields show and hide with the label")
+
+# ------------------------------------------------- 5) config round trip
+win.sw_dry.switch.setChecked(True)
+win.cb_mode.setCurrentIndex(1)
+win.sp_cps_min.setValue(11.5)
+win.ed_inv_key.setText("TAB")
+win.hk_toggle.setText("Ctrl+F5")
+win.sp_fx.setValue(277)
+win.sp_fy.setValue(193)
+win._pull()
+win._save()
+
+reloaded = Config.load(sandbox)
+assert reloaded.drop.dry_run is True
+assert reloaded.target.mode == "background"
+assert reloaded.autoclick.cps_min == 11.5
+assert reloaded.drop.inventory_key == "tab", reloaded.drop.inventory_key
+assert reloaded.hotkeys.toggle == "Ctrl+F5"
+assert reloaded.drop.filter_point == [277, 193]
+assert reloaded.drop.templates == win.cfg.drop.templates
+print("OK  every control round-trips through config.json")
+
+# ------------------------------------------------- 6) start guard
+win.sw_drop.switch.setChecked(True)
+win.sw_dry.switch.setChecked(False)
+win.sp_fx.setValue(0)
+win.sp_fy.setValue(0)
+win.sp_dx.setValue(0)
+win.sp_dy.setValue(0)
+win._start_macro()
+assert win.engine is None, "macro started without the points being set"
+assert win.stack.currentIndex() == 3, "user was not sent to the Points tab"
+print("OK  refuses to arm without points and jumps to the right tab")
+
+# ------------------------------------------------- 7) point estimate + thumbs
+win._suggest_points()
+assert win.sp_fx.value() and win.sp_dx.value()
+assert win.cfg.drop.points_resolution[0] > 0
+
+shot = QPixmap(400, 300)
+shot.fill(QColor("#204050"))
+win._shot = shot
+win._shot_origin = (0, 0)
+win._store_thumb("filter", 200, 150)
+assert win._thumb_filter._pixmap is not None
+# a point near the edge must not blow up
+win._store_thumb("dropall", 3, 2)
+print("OK  estimate fills the fields and thumbnails crop safely")
+
+# ------------------------------------------------- 8) picker geometry
+picker = ScreenPicker(shot, QRect(0, 0, 800, 600), "title", "subtitle", "step")
+assert picker._to_shot(QPoint(400, 300)) == QPoint(200, 150)
+assert picker._to_shot(QPoint(0, 0)) == QPoint(0, 0)
+picker.deleteLater()
+print("OK  picker maps widget pixels back to screenshot pixels")
+
+# ------------------------------------------------- 9) form grid pairing
+grid = FormGrid(pairs=2)
+from PySide6.QtWidgets import QLabel  # noqa: E402
+
+first = grid.add("a", QLabel("1"))
+grid.skip()
+second = grid.add("b", QLabel("2"))
+third = grid.add("c", QLabel("3"))
+assert grid.grid.getItemPosition(grid.grid.indexOf(first))[0] == 0
+assert grid.grid.getItemPosition(grid.grid.indexOf(second))[0] == 1
+assert grid.grid.getItemPosition(grid.grid.indexOf(third))[0] == 1
+print("OK  form grid keeps skipped slots aligned")
+
+# ------------------------------------------------- 10) icons render
+for name in icons.DRAW:
+    art = icons.pixmap(name, "#40DCF0", 18)
+    assert not art.isNull(), f"icon {name} rendered empty"
+    image = art.toImage()
+    painted = any(image.pixelColor(x, y).alpha() > 0
+                  for x in range(0, image.width(), 3)
+                  for y in range(0, image.height(), 3))
+    assert painted, f"icon {name} drew nothing"
+# cached lookups return the very same pixmap object
+assert icons.pixmap("grid", "#40DCF0", 18) is icons.pixmap("grid", "#40DCF0", 18)
+print(f"OK  {len(icons.DRAW)} vector icons render")
+
+# ------------------------------------------------- 11) branded backdrop
+assert load_brand() is not None, "assets/brand.png is missing"
+canvas = Backdrop()
+canvas.resize(900, 600)
+frame = canvas.grab().toImage()
+# the brand lives on the right; the left edge must stay clean canvas
+left = frame.pixelColor(40, 300)
+right = frame.pixelColor(820, 90)
+assert left.alpha() == 255 and right.alpha() == 255
+assert right.lightness() != left.lightness(), "brand backdrop did not paint"
+# and it must never be so bright that text stops reading over it
+assert right.lightness() < 130, f"backdrop too bright: {right.lightness()}"
+canvas.deleteLater()
+print("OK  backdrop paints the brand without blowing out the canvas")
+
+# ------------------------------------------------- 12) branding
+assert APP_NAME == "A.N.S Tools"
+assert win.windowTitle() == APP_NAME
+print("OK  window carries the A.N.S Tools name")
+
+win.hotkeys.stop()
+win.close()
+print("\nALL UI TESTS PASSED")
