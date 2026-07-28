@@ -165,19 +165,36 @@ assert win.stack.currentIndex() == 3, "user was not sent to the Points tab"
 print("OK  refuses to arm without points and jumps to the right tab")
 
 # ------------------------------------------------- 7) point estimate + thumbs
+# pin the target area: the ambient desktop must not decide what this asserts
+win._game_area = lambda: (0, 0, 1920, 1080)
 win._suggest_points()
-assert win.sp_fx.value() and win.sp_dx.value()
-assert win.cfg.drop.points_resolution[0] > 0
+assert [win.sp_fx.value(), win.sp_fy.value()] == [277, 193]
+assert [win.sp_dx.value(), win.sp_dy.value()] == [457, 193]
+assert win.cfg.drop.points_resolution == [1920, 1080]
+
+# the shape that started this: a tall, narrow Explorer window matching "ark"
+# put the estimate at x = -175, which the spin box would silently clamp to 0
+win.sp_fx.setValue(11)
+win.sp_dx.setValue(11)
+win._game_area = lambda: (8, 0, 891, 994)
+win._suggest_points()
+assert win.sp_fx.value() == 11, "an off-window estimate was applied anyway"
+win._game_area = lambda: (0, 0, 1920, 1080)
+print("OK  estimate fills the fields, and refuses when it lands off-window")
+
+# points on a monitor left of the primary one are representable
+win.sp_fx.setValue(-1200)
+assert win.sp_fx.value() == -1200, "negative coordinates got clamped"
 
 shot = QPixmap(400, 300)
 shot.fill(QColor("#204050"))
 win._shot = shot
 win._shot_origin = (0, 0)
 win._store_thumb("filter", 200, 150)
-assert win._thumb_filter._pixmap is not None
+assert win._thumb_filter.has_preview
 # a point near the edge must not blow up
 win._store_thumb("dropall", 3, 2)
-print("OK  estimate fills the fields and thumbnails crop safely")
+print("OK  thumbnails crop safely near an edge")
 
 # ------------------------------------------------- 8) picker geometry
 picker = ScreenPicker(shot, QRect(0, 0, 800, 600), "title", "subtitle", "step")
@@ -263,6 +280,49 @@ assert not win.btn_apply.isVisible()
 assert "could not reach origin" in win.lbl_update.text()
 print("OK  update card reflects every check outcome")
 
+# ------------------------------------------------- 14) stale preview guard
+win.stack.setCurrentIndex(3)
+app.processEvents()
+shot2 = QPixmap(400, 300)
+shot2.fill(QColor("#204050"))
+win._shot = shot2
+win._shot_origin = (0, 0)
+win._applying_points = True
+win.sp_fx.setValue(200)
+win.sp_fy.setValue(150)
+win._applying_points = False
+win._store_thumb("filter", 200, 150)
+assert win._thumb_filter.has_preview, "picking should leave a preview"
+
+# typing a coordinate by hand invalidates the crop it no longer matches
+win.sp_fx.setValue(640)
+app.processEvents()
+assert not win._thumb_filter.has_preview, "stale preview survived a manual edit"
+print("OK  hand-edited coordinates drop the preview that no longer matches")
+
+# ------------------------------------------------- 15) log escaping
+win.log_view.clear()
+win._log('window found: "<script>Ark & Co</script>"', "ok")
+app.processEvents()
+logged = win.log_view.toPlainText()
+assert "<script>" in logged, f"escaped text was lost: {logged}"
+assert "&amp;" not in logged, "double-escaped the ampersand"
+print("OK  window titles cannot inject markup into the log")
+
+# ------------------------------------------------- 16) picker guards
+win._picking = True
+win.engine = None
+win._start_macro()
+assert win.engine is None, "macro armed while the picker was open"
+win._picking = False
+print("OK  the macro refuses to arm while points are being picked")
+
+# ------------------------------------------------- 17) english formatting
+win._on_stats(1284, 3)
+assert win.tile_clicks.value.text() == "1,284", win.tile_clicks.value.text()
+print("OK  numbers use the app's own locale")
+
 win.hotkeys.stop()
 win.close()
 print("\nALL UI TESTS PASSED")
+

@@ -295,6 +295,13 @@ class PointThumb(QFrame):
         self._pixmap = pixmap
         self.update()
 
+    @property
+    def has_preview(self) -> bool:
+        return self._pixmap is not None and not self._pixmap.isNull()
+
+    def clear(self) -> None:
+        self.set_pixmap(None)
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)

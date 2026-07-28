@@ -8,7 +8,7 @@ before committing.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
@@ -134,7 +134,19 @@ class ScreenPicker(QWidget):
         center = self._to_shot(cursor)
         source = QRect(center.x() - span // 2, center.y() - span // 2, span, span)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
-        painter.drawPixmap(view, self._shot, source)
+
+        # near a screen edge the source runs past the screenshot; draw only the
+        # part that exists, in its proportional place, so the crosshair keeps
+        # telling the truth about which pixel is under it
+        visible = source.intersected(self._shot.rect())
+        painter.fillRect(view, QColor(T.INK))
+        if not visible.isEmpty():
+            scale = view.width() / source.width()
+            painter.drawPixmap(
+                QRectF(view.x() + (visible.x() - source.x()) * scale,
+                       view.y() + (visible.y() - source.y()) * scale,
+                       visible.width() * scale, visible.height() * scale),
+                self._shot, QRectF(visible))
 
         # center marker of the magnifier
         mid = view.center()

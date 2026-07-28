@@ -42,13 +42,30 @@ class Backdrop(QFrame):
         super().__init__(parent)
         self.setObjectName("root")
         self._brand = load_brand()
+        self._cache: QPixmap | None = None
 
     def paintEvent(self, event) -> None:
+        # the canvas only changes when the window is resized, so compose it
+        # once and blit: rescaling the brand and running four gradients on
+        # every repaint made hovering a button do real work
+        if self._cache is None or self._cache.size() != self.size():
+            self._cache = self._render()
+
         painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._cache)
+        painter.end()
+        # let the stylesheet draw the 1px border on top
+        super().paintEvent(event)
+
+    def _render(self) -> QPixmap:
+        canvas = QPixmap(self.size())
+        canvas.fill(Qt.transparent)
+
+        painter = QPainter(canvas)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
-        rect = QRectF(self.rect())
+        rect = QRectF(canvas.rect())
         clip = QPainterPath()
         clip.addRoundedRect(rect, RADIUS, RADIUS)
         painter.setClipPath(clip)
@@ -58,10 +75,8 @@ class Backdrop(QFrame):
         if self._brand is not None:
             self._paint_brand(painter, rect)
         self._paint_scrim(painter, rect)
-
         painter.end()
-        # let the stylesheet draw the 1px border on top
-        super().paintEvent(event)
+        return canvas
 
     # ------------------------------------------------------------ layers
     def _paint_gradient(self, painter: QPainter, rect: QRectF) -> None:

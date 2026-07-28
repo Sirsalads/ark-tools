@@ -91,17 +91,22 @@ class Config:
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 _merge(cfg, raw)
                 _migrate(cfg, raw)
-            except (json.JSONDecodeError, OSError, TypeError):
+            except (json.JSONDecodeError, OSError, TypeError, ValueError):
                 pass  # corrupted file -> fall back to defaults
+        _sanitize(cfg)
         return cfg
 
     def save(self, path: Path | None = None) -> None:
+        # write beside the target and rename: a crash mid-write would otherwise
+        # leave a truncated config that loses every setting
         path = Path(path) if path else CONFIG_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        staged = path.with_name(path.name + ".tmp")
+        staged.write_text(
             json.dumps(asdict(self), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        staged.replace(path)
 
 
 def _migrate(cfg: "Config", raw: dict) -> None:
@@ -118,6 +123,44 @@ def _migrate(cfg: "Config", raw: dict) -> None:
     old_hotkey = (raw.get("hotkeys") or {}).get("capture_point")
     if old_hotkey and "pick_points" not in (raw.get("hotkeys") or {}):
         cfg.hotkeys.pick_points = old_hotkey
+
+
+def _point(value: Any) -> list[int]:
+    """Coerce whatever is in the file into a usable [x, y]."""
+    try:
+        return [int(value[0]), int(value[1])]
+    except (TypeError, ValueError, IndexError, KeyError):
+        return [0, 0]
+
+
+def _template(value: Any) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    keyword = str(value.get("keyword", "")).strip()
+    if not keyword:
+        return None
+    return {"name": str(value.get("name") or keyword).strip(),
+            "keyword": keyword,
+            "enabled": bool(value.get("enabled"))}
+
+
+def _sanitize(cfg: "Config") -> None:
+    """
+    Make a hand-edited config safe to run.
+
+    The engine indexes straight into these, on its own thread — a string where
+    a point should be would blow up mid-farm instead of at load time.
+    """
+    drop = cfg.drop
+    drop.filter_point = _point(drop.filter_point)
+    drop.dropall_point = _point(drop.dropall_point)
+    drop.points_resolution = _point(drop.points_resolution)
+    if isinstance(drop.templates, list):
+        # an empty list is a real choice, so it is kept as-is
+        drop.templates = [t for t in (_template(item) for item in drop.templates)
+                          if t]
+    else:
+        drop.templates = default_templates()
 
 
 def _merge(obj: Any, raw: dict) -> None:

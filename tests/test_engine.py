@@ -251,4 +251,48 @@ assert not any(t["enabled"] for t in presets.default_templates()
                if presets.risk_of(t["keyword"])[0] == "high")
 print("OK  preset risk flags")
 
+# ------------------------------------------- 10) a hand-broken config is safe
+broken = pathlib.Path(tempfile.gettempdir()) / "ark_macro_broken.json"
+broken.write_text(json.dumps({
+    "drop": {
+        "filter_point": "nonsense",
+        "dropall_point": [12],
+        "points_resolution": None,
+        "templates": ["not a dict", {"keyword": "  "}, {"keyword": "thatch"},
+                      {"name": "Stone", "keyword": "stone", "enabled": "yes"}],
+    },
+}), encoding="utf-8")
+salvaged = Config.load(broken)
+assert salvaged.drop.filter_point == [0, 0], salvaged.drop.filter_point
+assert salvaged.drop.dropall_point == [0, 0], salvaged.drop.dropall_point
+assert salvaged.drop.points_resolution == [0, 0]
+assert salvaged.drop.templates == [
+    {"name": "thatch", "keyword": "thatch", "enabled": False},
+    {"name": "Stone", "keyword": "stone", "enabled": True},
+], salvaged.drop.templates
+# and the engine can run against it without blowing up on the bad points
+recovered = eng.MacroEngine(salvaged)
+recovered.log.connect(lambda _m, _l: None)
+recovered._running = True
+recovered._run_drop()   # refuses on empty points instead of raising
+broken.unlink()
+print("OK  a hand-broken config is coerced instead of crashing the engine")
+
+# ------------------------------------------- 11) an empty list stays empty
+empty = pathlib.Path(tempfile.gettempdir()) / "ark_macro_empty.json"
+empty.write_text(json.dumps({"drop": {"templates": []}}), encoding="utf-8")
+assert Config.load(empty).drop.templates == [], "defaults resurrected"
+empty.unlink()
+print("OK  clearing every template is respected on reload")
+
+# ------------------------------------------- 12) saving is atomic
+target = pathlib.Path(tempfile.gettempdir()) / "ark_macro_save.json"
+target.write_text("{}", encoding="utf-8")
+staged = target.with_name(target.name + ".tmp")
+Config().save(target)
+assert not staged.exists(), "the staging file was left behind"
+assert Config.load(target).drop.templates, "saved config did not round-trip"
+target.unlink()
+print("OK  saving stages and renames, leaving no partial file")
+
 print("\nALL TESTS PASSED")

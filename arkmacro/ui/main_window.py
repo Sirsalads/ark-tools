@@ -4,6 +4,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import time
+from html import escape
 
 from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPixmap
@@ -120,11 +121,14 @@ def step_row(number: str, title: str, detail: str) -> QHBoxLayout:
     text.setSpacing(1)
     head = QLabel(title)
     head.setObjectName("fieldLabel")
+    body = hint_label(detail)
     text.addWidget(head)
-    text.addWidget(hint_label(detail))
+    text.addWidget(body)
     row.addWidget(badge, 0, Qt.AlignTop)
     row.addLayout(text, 1)
-    row.title_label = head          # so callers can keep the text in sync
+    # so callers can keep wording that mentions a setting in sync with it
+    row.title_label = head
+    row.detail_label = body
     return row
 
 
@@ -139,7 +143,8 @@ class MainWindow(QWidget):
         self._pick_screen = None
         self._update_worker: updater.UpdateWorker | None = None
         self._silent_check = False
-        self._restarting = False
+        self._picking = False
+        self._applying_points = False
 
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -456,11 +461,9 @@ class MainWindow(QWidget):
             "what the HUD is showing. Freeze the screen once and pick them."))
 
         guide = Card("Pick them on a frozen screen", accent=True)
-        guide.add(step_row(
-            "1", "Open the inventory in ARK",
-            f"exactly the state the macro will use — inventory alone with "
-            f"«{self.cfg.drop.inventory_key.upper()}», or with a storage box "
-            "open. The icon row sits in a different place in each."))
+        open_step = step_row("1", "Open the inventory in ARK", "")
+        self.lbl_open_step = open_step.detail_label
+        guide.add(open_step)
         pick_step = step_row(
             "2", f"Press {self.cfg.hotkeys.pick_points}",
             "this window hides, the screen is frozen and a magnifier follows "
@@ -523,8 +526,10 @@ class MainWindow(QWidget):
 
         coords = QHBoxLayout()
         coords.setSpacing(8)
-        x_box = spin(0, 30000, point[0] if point else 0)
-        y_box = spin(0, 30000, point[1] if len(point) > 1 else 0)
+        # negative coordinates are legitimate: a monitor placed left of or
+        # above the primary one lives at negative virtual-desktop offsets
+        x_box = spin(-30000, 30000, point[0] if point else 0)
+        y_box = spin(-30000, 30000, point[1] if len(point) > 1 else 0)
         x_box.setFixedWidth(86)
         y_box.setFixedWidth(86)
         for label, box in (("X", x_box), ("Y", y_box)):
@@ -694,6 +699,11 @@ class MainWindow(QWidget):
 
     def _refresh_points_status(self) -> None:
         drop = self.cfg.drop
+        if hasattr(self, "lbl_open_step"):
+            self.lbl_open_step.setText(
+                f"exactly the state the macro will use — inventory alone with "
+                f"«{drop.inventory_key.upper()}», or with a storage box open. "
+                "The icon row sits in a different place in each.")
         res = drop.points_resolution
         ready = any(drop.filter_point) and any(drop.dropall_point)
         where = f" · captured at {res[0]}x{res[1]}" if res and all(res) else ""
@@ -727,6 +737,10 @@ class MainWindow(QWidget):
                     signal.connect(self._on_change)
                     break
         self.tpl_editor.changed.connect(self._on_change)
+        for box in (self.sp_fx, self.sp_fy):
+            box.valueChanged.connect(lambda *_: self._invalidate_thumb("filter"))
+        for box in (self.sp_dx, self.sp_dy):
+            box.valueChanged.connect(lambda *_: self._invalidate_thumb("dropall"))
 
     def _on_change(self, *_args) -> None:
         self._pull()
@@ -792,6 +806,9 @@ class MainWindow(QWidget):
             self._start_macro()
 
     def _start_macro(self) -> None:
+        if self._picking:
+            self._log("finish picking the points before starting", "warn")
+            return
         self._pull()
         self._save()
         drop = self.cfg.drop
@@ -849,19 +866,30 @@ class MainWindow(QWidget):
         self.titlebar.status.set_state(state)
 
     def _on_stats(self, clicks: int, drops: int) -> None:
-        self.tile_clicks.set_value(f"{clicks:,}".replace(",", "."))
+        self.tile_clicks.set_value(f"{clicks:,}")
         self.tile_drops.set_value(str(drops))
 
     def _detect_window(self) -> None:
         fragment = self.ed_window.text().strip() or "ARK"
-        matches = [title for _hwnd, title in w.list_windows()
+        titles = dict(w.list_windows())
+        matches = [title for title in titles.values()
                    if fragment.lower() in title.lower()]
-        if matches:
-            self._log(f'window found: "{matches[0]}"', "ok")
-        else:
-            visible = ", ".join(t for _h, t in w.list_windows()[:8])
+        chosen = w.find_window(fragment)
+        if not chosen:
+            visible = ", ".join(list(titles.values())[:8])
             self._log(f'no window contains "{fragment}". Visible titles: '
                       f"{visible}", "warn")
+            return
+
+        rect = w.client_rect(chosen)
+        size = f"{rect[2]}x{rect[3]}" if rect else "unknown size"
+        self._log(f'targeting "{titles.get(chosen, "?")}" ({size})', "ok")
+        if len(matches) > 1:
+            others = ", ".join(f'"{t}"' for t in matches
+                               if t != titles.get(chosen))
+            self._log(f"{len(matches)} windows match that text — also {others}. "
+                      "Make the title more specific if the wrong one wins.",
+                      "warn")
 
     # --------------------------------------------------------- game geometry
     def _game_area(self) -> tuple[int, int, int, int]:
@@ -876,6 +904,16 @@ class MainWindow(QWidget):
     def _suggest_points(self) -> None:
         x, y, width, height = self._game_area()
         filter_point, drop_point = ark_layout.suggest(width, height, (x, y))
+        # a window narrower than the HUD model puts the estimate off its left
+        # edge; the spin boxes would clamp it to 0 and hand back a silent lie
+        inside = all(x <= point[0] < x + width and y <= point[1] < y + height
+                     for point in (filter_point, drop_point))
+        if not inside:
+            self._log(f"cannot estimate for a {width}x{height} target — that is "
+                      "too narrow for ARK's HUD. Check the window title on the "
+                      "Settings tab, or pick the points on a frozen screen.",
+                      "err")
+            return
         self.sp_fx.setValue(filter_point[0])
         self.sp_fy.setValue(filter_point[1])
         self.sp_dx.setValue(drop_point[0])
@@ -919,8 +957,14 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------- point picking
     def _begin_pick(self) -> None:
-        if self._picker is not None:
+        if self._picking:
             return
+        # a running macro would keep firing clicks into the overlay
+        if self.engine is not None and self.engine.isRunning():
+            self._stop_macro()
+            self._log("macro stopped so it does not click into the picker",
+                      "warn")
+        self._picking = True
         self._log("freezing the screen — bring ARK's inventory up", "warn")
         self.hide()
         QApplication.processEvents()
@@ -943,6 +987,7 @@ class MainWindow(QWidget):
     def _grab_and_pick(self) -> None:
         screen = self._pick_target_screen()
         if screen is None:
+            self._picking = False
             self.show()
             self._log("no screen available to capture", "err")
             return
@@ -983,23 +1028,27 @@ class MainWindow(QWidget):
             self._picker = None
 
     def _on_picked(self, key: str, x: int, y: int, index: int) -> None:
+        self._applying_points = True   # these edits come with a fresh preview
         if key == "filter":
             self.sp_fx.setValue(x)
             self.sp_fy.setValue(y)
         else:
             self.sp_dx.setValue(x)
             self.sp_dy.setValue(y)
+        self._applying_points = False
         self._store_thumb(key, x, y)
         self._log(f"{key} point set to ({x}, {y})", "ok")
         QTimer.singleShot(60, lambda: self._pick_step(index + 1))
 
     def _cancel_pick(self) -> None:
         self._drop_picker()
+        self._picking = False
         self._restore_window()
         self._log("point picking cancelled", "warn")
 
     def _finish_pick(self) -> None:
         self._drop_picker()
+        self._picking = False
         _x, _y, width, height = self._game_area()
         self.cfg.drop.points_resolution = [width, height]
         self._restore_window()
@@ -1015,6 +1064,24 @@ class MainWindow(QWidget):
         self.stack.setCurrentIndex(3)
 
     # ------------------------------------------------------------ previews
+    def _invalidate_thumb(self, key: str) -> None:
+        """
+        A hand-typed or rescaled coordinate no longer matches the old crop.
+
+        The preview is meant to be proof of what you targeted, so a stale one
+        is worse than none at all.
+        """
+        if self._applying_points:
+            return
+        thumb: PointThumb = getattr(self, f"_thumb_{key}")
+        if not thumb.has_preview:
+            return
+        thumb.clear()
+        try:
+            (STATE_DIR / f"{key}.png").unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _store_thumb(self, key: str, x: int, y: int) -> None:
         """Keep a zoomed crop of what was targeted, as a visual receipt."""
         if self._shot is None:
@@ -1057,9 +1124,9 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------- updates
     def _refresh_version(self) -> None:
         repo = updater.local_state()
+        self.btn_check.setEnabled(repo.ok)
         if not repo.ok:
             self.lbl_version.setText(f"v{__version__}  ·  {repo.reason}")
-            self.btn_check.setEnabled(False)
             return
         dirty = "  ·  local changes" if repo.dirty else ""
         self.lbl_version.setText(
@@ -1083,7 +1150,8 @@ class MainWindow(QWidget):
         if self._update_worker is not None:
             self._update_worker.deleteLater()
             self._update_worker = None
-        self.btn_check.setEnabled(True)
+        # _refresh_version decides: outside a git clone there is nothing to check
+        self._refresh_version()
 
     def _on_update_checked(self, status: updater.Status) -> None:
         self._refresh_version()
@@ -1157,7 +1225,6 @@ class MainWindow(QWidget):
             self._log("could not relaunch — start the app again manually",
                       "err")
             return
-        self._restarting = True
         self.close()
 
     # ------------------------------------------------------------- hotkeys
@@ -1187,10 +1254,12 @@ class MainWindow(QWidget):
     def _log(self, message: str, level: str = "info") -> None:
         color = {"ok": T.OK, "warn": T.WARN, "err": T.ERR}.get(level, T.MUTED)
         stamp = time.strftime("%H:%M:%S")
-        html = (f'<span style="color:{T.BORDER}">{stamp}</span> '
-                f'<span style="color:{color}">{message}</span>')
-        self.log_view.appendHtml(html)
-        self.mini_log.appendHtml(html)
+        # messages carry window titles, which any program on the machine can
+        # set — an unescaped "<" would eat the rest of the line
+        line = (f'<span style="color:{T.BORDER}">{stamp}</span> '
+                f'<span style="color:{color}">{escape(message)}</span>')
+        self.log_view.appendHtml(line)
+        self.mini_log.appendHtml(line)
 
     # --------------------------------------------------------------- close
     def closeEvent(self, event) -> None:

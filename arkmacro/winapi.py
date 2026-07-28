@@ -12,6 +12,7 @@ Two delivery paths:
 from __future__ import annotations
 
 import ctypes
+import os
 import time
 from ctypes import wintypes
 
@@ -247,6 +248,40 @@ MK_LBUTTON, MK_RBUTTON = 0x0001, 0x0002
 
 _ENUM_PROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
+# Without explicit signatures ctypes marshals every argument as a C int, which
+# truncates a 64-bit HWND. These handles usually fit in 32 bits, so the bug
+# would only ever show up on someone else's machine — pin the types instead.
+user32.GetForegroundWindow.argtypes = ()
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.IsWindow.argtypes = (wintypes.HWND,)
+user32.IsWindow.restype = wintypes.BOOL
+user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+user32.IsWindowVisible.restype = wintypes.BOOL
+user32.GetWindowTextLengthW.argtypes = (wintypes.HWND,)
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+user32.GetWindowTextW.restype = ctypes.c_int
+user32.GetClientRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+user32.GetClientRect.restype = wintypes.BOOL
+user32.ClientToScreen.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.POINT))
+user32.ClientToScreen.restype = wintypes.BOOL
+user32.ScreenToClient.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.POINT))
+user32.ScreenToClient.restype = wintypes.BOOL
+user32.PostMessageW.argtypes = (wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                wintypes.LPARAM)
+user32.PostMessageW.restype = wintypes.BOOL
+user32.EnumWindows.argtypes = (_ENUM_PROC, wintypes.LPARAM)
+user32.EnumWindows.restype = wintypes.BOOL
+user32.GetCursorPos.argtypes = (ctypes.POINTER(wintypes.POINT),)
+user32.GetCursorPos.restype = wintypes.BOOL
+user32.SetCursorPos.argtypes = (ctypes.c_int, ctypes.c_int)
+user32.SetCursorPos.restype = wintypes.BOOL
+user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
+user32.GetSystemMetrics.restype = ctypes.c_int
+user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND,
+                                            ctypes.POINTER(wintypes.DWORD))
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+
 
 def list_windows() -> list[tuple[int, str]]:
     """Every visible window that has a title."""
@@ -267,15 +302,42 @@ def list_windows() -> list[tuple[int, str]]:
     return found
 
 
+def window_pid(hwnd: int) -> int:
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value
+
+
 def find_window(fragment: str) -> int | None:
-    """First HWND whose title contains `fragment`, case-insensitive."""
+    """
+    Best window whose title contains `fragment`, case-insensitive.
+
+    "First match" was too naive: a folder called ark-farm-macro open in
+    Explorer outranked the game and the macro happily aimed at it. Candidates
+    are now scored — an exact title beats a prefix beats a substring, and the
+    larger client area breaks ties, because a game window is the big one.
+    Our own windows never qualify.
+    """
     needle = (fragment or "").lower().strip()
     if not needle:
         return None
+
+    own = os.getpid()
+    best: int | None = None
+    best_score = (-1, -1)
     for hwnd, title in list_windows():
-        if needle in title.lower():
-            return hwnd
-    return None
+        lowered = title.lower()
+        if needle not in lowered:
+            continue
+        if window_pid(hwnd) == own:
+            continue
+        rank = 3 if lowered == needle else 2 if lowered.startswith(needle) else 1
+        rect = client_rect(hwnd)
+        area = rect[2] * rect[3] if rect else 0
+        if (rank, area) > best_score:
+            best_score = (rank, area)
+            best = hwnd
+    return best
 
 
 def is_window(hwnd: int) -> bool:

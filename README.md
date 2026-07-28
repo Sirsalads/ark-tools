@@ -166,6 +166,10 @@ path to "farm while I use the PC" is a second machine or a VM.
   refreshed yet is the usual cause of dropping the wrong thing.
 - **Backspaces to clear**: must be longer than your longest keyword.
 - **Unicode typing**: only if the search field ignores the letters.
+- **Window title**: the fragment is matched against every open window, so keep
+  it specific. A folder named `ark-something` open in Explorer matches `ARK`
+  too — the app prefers an exact title, then a prefix, then the largest window,
+  and **Find the ARK window** tells you which one it picked.
 
 ## Layout
 
@@ -183,7 +187,7 @@ arkmacro/ui/backdrop.py  gradient, glows and the brand melt
 arkmacro/ui/icons.py     vector icons drawn with QPainter
 arkmacro/ui/             theme, widgets and the main window (PySide6)
 assets/brand.png         backdrop image (yours to replace)
-tests/                   engine and UI test suites
+tests/                   engine, UI, updater and window-matching suites
 ```
 
 Generated at runtime: `config.json`, `state/` (point thumbnails), `captures/`
@@ -195,6 +199,7 @@ Run the tests — they never send a real click:
 python tests/test_engine.py
 python tests/test_ui.py
 python tests/test_updater.py
+python tests/test_winapi.py
 ```
 
 ## Before you use it
