@@ -25,11 +25,14 @@ class AutoClick:
 @dataclass
 class DropRoutine:
     enabled: bool = True
-    trigger: str = "interval"      # interval | clicks | manual
+    trigger: str = "clicks"        # interval | clicks | manual
     interval_s: int = 180
-    every_clicks: int = 600
+    every_clicks: int = 12
     inventory_key: str = "i"
-    close_with: str = "same"       # same | esc
+    close_with: str = "esc"        # same | esc
+    # ARK's search field keeps the keyboard after the filter is typed, so the
+    # first key press only leaves the field — the panel itself needs another
+    close_presses: int = 2
     open_wait_ms: int = 1100
     close_wait_ms: int = 700
     filter_point: list[int] = field(default_factory=lambda: [0, 0])
@@ -126,8 +129,26 @@ class Config:
 
 
 def _migrate(cfg: "Config", raw: dict) -> None:
-    """Turn the flat keyword list of older versions into templates."""
+    """Bring a file written by an older version onto the current shape."""
     drop = raw.get("drop") or {}
+    if not isinstance(drop, dict):
+        drop = {}
+    # a single close key never actually closed anything: the search field ate
+    # it and the macro carried on clicking inside the open inventory. Configs
+    # written before the fix are moved onto the two-press default.
+    if "close_presses" not in drop:
+        cfg.drop.close_with = "esc"
+        cfg.drop.close_presses = 2
+        # a trigger still sitting on the old defaults follows the new one;
+        # anything that was actually chosen stays where it was put
+        untouched = (drop.get("trigger", "interval") == "interval"
+                     and drop.get("interval_s", 180) == 180)
+        if untouched:
+            cfg.drop.trigger = "clicks"
+        if untouched or (drop.get("trigger") == "clicks"
+                         and drop.get("every_clicks", 600) == 600):
+            cfg.drop.every_clicks = 12
+
     legacy = drop.get("keywords")
     if legacy and "templates" not in drop:
         cfg.drop.templates = [
@@ -147,6 +168,14 @@ def _point(value: Any) -> list[int]:
         return [int(value[0]), int(value[1])]
     except (TypeError, ValueError, IndexError, KeyError):
         return [0, 0]
+
+
+def _count(value: Any, fallback: int, low: int, high: int) -> int:
+    """Clamp a hand-edited number into the range the engine can act on."""
+    try:
+        return max(low, min(int(value), high))
+    except (TypeError, ValueError):
+        return fallback
 
 
 def _template(value: Any) -> dict | None:
@@ -171,6 +200,8 @@ def _sanitize(cfg: "Config") -> None:
     drop.filter_point = _point(drop.filter_point)
     drop.dropall_point = _point(drop.dropall_point)
     drop.points_resolution = _point(drop.points_resolution)
+    # zero presses would leave the inventory open for the rest of the session
+    drop.close_presses = _count(drop.close_presses, 2, 1, 5)
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

@@ -137,14 +137,25 @@ All rebindable on the **Settings** tab.
 
 ## One drop pass, step by step
 
-Fired on a timer, on a click count, or by `F7`:
+Fired on a click count (**every 12 clicks** by default), on a timer, or by
+`F7`:
 
 1. pause the autoclick and press the inventory key (`I` by default);
 2. click the filter field and wipe the previous text with backspaces;
 3. type the template's keyword;
 4. click **Drop All**;
 5. repeat for every checked template, in list order;
-6. clear the filter, close the inventory, resume farming.
+6. clear the filter, press **`Esc` twice** to close the inventory, resume
+   farming.
+
+Two presses, not one, and that is the whole trick: typing in the filter leaves
+the **search field holding the keyboard**, so the first `Esc` only steps out of
+the field and the second is what actually closes the panel. With a single press
+the inventory stayed open and the macro kept clicking inside it — swings that
+never landed on a node, and a next pass that pressed `I` into an already open
+panel. Set it under **Templates → Inventory and timings → Presses to close**
+(1–5). Closing with the inventory key instead takes a single press; a second
+one just opens it again, so the field follows the key you pick.
 
 ## GeForce NOW
 
@@ -197,8 +208,13 @@ path to "farm while I use the PC" is a second machine or a VM.
 - **Min/max speed (cps)**: drawn at random on every click so the rhythm is not
   metronomic. Hold time counts towards the period, so 9 cps really is 9 cps.
 - **Micro pauses**: a short breather every N clicks.
+- **Run every N clicks**: the default trigger, at 12 — a dozen swings, then the
+  inventory pass, then straight back to farming.
 - **Inventory waits**: raise them on a laggy server. A filter that has not
   refreshed yet is the usual cause of dropping the wrong thing.
+- **Presses to close**: two with `Esc` (one to leave the search field, one to
+  close), one with the inventory key. If a pass ever ends with the inventory
+  still up, this is the setting to raise.
 - **Backspaces to clear**: must be longer than your longest keyword.
 - **Unicode typing**: only if the search field ignores the letters.
 - **Window title**: the fragment is matched against every open window, so keep

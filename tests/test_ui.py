@@ -136,6 +136,7 @@ win.sw_dry.switch.setChecked(True)
 win.cb_mode.setCurrentIndex(1)
 win.sp_cps_min.setValue(11.5)
 win.ed_inv_key.setText("TAB")
+win.sp_close_presses.setValue(3)
 win.hk_toggle.setText("Ctrl+F5")
 win.sp_fx.setValue(277)
 win.sp_fy.setValue(193)
@@ -147,6 +148,7 @@ assert reloaded.drop.dry_run is True
 assert reloaded.target.mode == "background"
 assert reloaded.autoclick.cps_min == 11.5
 assert reloaded.drop.inventory_key == "tab", reloaded.drop.inventory_key
+assert reloaded.drop.close_presses == 3, reloaded.drop.close_presses
 assert reloaded.hotkeys.toggle == "Ctrl+F5"
 assert reloaded.drop.filter_point == [277, 193]
 assert reloaded.drop.templates == win.cfg.drop.templates
@@ -402,6 +404,20 @@ win.sw_afk.switch.setChecked(False)
 app.processEvents()
 assert not win._afk_timer.isActive(), "disabling did not stop the timer"
 print("OK  anti-afk taps a dead key, and only when it is safe to")
+
+# ------------------------------------------------- 21) closing the inventory
+win.stack.setCurrentIndex(2)
+win.cb_close.setCurrentIndex(1)             # Esc
+win.sp_close_presses.setValue(1)
+win.cb_close.setCurrentIndex(0)             # the inventory key only toggles
+app.processEvents()
+assert win.sp_close_presses.value() == 1, win.sp_close_presses.value()
+win.cb_close.setCurrentIndex(1)             # Esc: the search field eats one
+app.processEvents()
+assert win.sp_close_presses.value() == 2, win.sp_close_presses.value()
+win._pull()
+assert win.cfg.drop.close_with == "esc" and win.cfg.drop.close_presses == 2
+print("OK  the close press count follows the key that gets sent")
 
 win.hotkeys.stop()
 win.close()

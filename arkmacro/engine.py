@@ -17,6 +17,10 @@ from PySide6.QtCore import QObject, QThread, Signal
 from . import winapi as w
 from .config import Config
 
+# gap between the repeated presses that close the inventory: sent back to back
+# the game treats them as one keystroke and the panel stays up
+CLOSE_GAP_MS = 180
+
 
 class MacroEngine(QThread):
     log = Signal(str, str)            # message, level (info|ok|warn|err)
@@ -181,10 +185,19 @@ class MacroEngine(QThread):
             return
         self._backspaces(d.clear_backspaces)
 
-        # 6) close the inventory
+        # 6) close the inventory. Typing in the filter leaves the search field
+        #    holding the keyboard, so the first press only steps out of it and
+        #    the panel is still up — a single Esc left the macro clicking
+        #    inside an open inventory for the rest of the session.
         if not self._wait(250):
             return
-        self._tap_key("esc" if d.close_with == "esc" else d.inventory_key)
+        close_key = "esc" if d.close_with == "esc" else d.inventory_key
+        presses = max(d.close_presses, 1)
+        self.log.emit(f"closing the inventory — {presses}x {close_key}", "info")
+        for index in range(presses):
+            if index and not self._wait(CLOSE_GAP_MS):
+                return
+            self._tap_key(close_key)
         if not self._wait(d.close_wait_ms):
             return
 

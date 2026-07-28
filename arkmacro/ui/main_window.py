@@ -322,7 +322,8 @@ class MainWindow(QWidget):
             ("2", "Focus the filter", "clicks the search field and clears it"),
             ("3", "Type the keyword", "one enabled template at a time"),
             ("4", "Drop All", "with the filter on, only what is listed falls"),
-            ("5", "Repeat and resume", "clears the filter, closes, back to farming"),
+            ("5", "Repeat and resume",
+             "clears the filter, closes with Esc twice, back to farming"),
         ):
             cycle.add(step_row(number, title, detail))
         lay.addWidget(cycle)
@@ -399,8 +400,9 @@ class MainWindow(QWidget):
         self.cb_trigger.currentIndexChanged.connect(self._sync_trigger_fields)
         tgrid.add("Trigger", self.cb_trigger)
         self.sp_interval = spin(10, 7200, self.cfg.drop.interval_s, " s", 10)
-        self.sp_every_clicks = spin(10, 100000, self.cfg.drop.every_clicks,
-                                    " clicks", 50)
+        # a dozen swings is a normal pass on a rich node, so the step is one
+        self.sp_every_clicks = spin(1, 100000, self.cfg.drop.every_clicks,
+                                    " clicks", 1)
         self.lbl_interval = tgrid.add("Interval", self.sp_interval)
         self.lbl_clicks = tgrid.add("Run every", self.sp_every_clicks)
         trigger.add(tgrid)
@@ -437,7 +439,12 @@ class MainWindow(QWidget):
         self.cb_close = combo(["Same key", "Esc"],
                               0 if self.cfg.drop.close_with == "same" else 1,
                               width=124)
+        self.cb_close.currentIndexChanged.connect(self._sync_close_presses)
         igrid.add("Close inventory with", self.cb_close)
+        self.sp_close_presses = spin(1, 5, self.cfg.drop.close_presses, "x", 1)
+        igrid.add("Presses to close", self.sp_close_presses,
+                  "The search field swallows the first one, so Esc twice is "
+                  "what actually closes the inventory")
         self.sp_open_wait = spin(100, 8000, self.cfg.drop.open_wait_ms, " ms", 50)
         self.sp_type_wait = spin(50, 5000, self.cfg.drop.after_type_wait_ms,
                                  " ms", 50)
@@ -452,6 +459,11 @@ class MainWindow(QWidget):
         igrid.add("Backspaces to clear", self.sp_backspaces,
                   "Must be longer than your longest keyword")
         timing.add(igrid)
+        timing.add(hint_label(
+            "Typing the filter leaves the search field holding the keyboard, "
+            "so the first Esc only steps out of it and the second is what "
+            "closes the inventory. Closing with the inventory key instead "
+            "takes a single press — a second one just opens it again."))
         lay.addWidget(timing)
 
         lay.addStretch(1)
@@ -721,6 +733,20 @@ class MainWindow(QWidget):
         self.lbl_clicks.setVisible(index == 1)
         self.sp_every_clicks.setVisible(index == 1)
 
+    def _sync_close_presses(self) -> None:
+        """
+        Move the press count with the key that will be sent.
+
+        Esc goes twice: once to step out of the search field, once to close the
+        panel. The inventory key toggles instead, so a repeat would open it
+        straight back up.
+        """
+        esc = self.cb_close.currentIndex() == 1
+        if esc and self.sp_close_presses.value() < 2:
+            self.sp_close_presses.setValue(2)
+        elif not esc and self.sp_close_presses.value() > 1:
+            self.sp_close_presses.setValue(1)
+
     @property
     def _streaming(self) -> bool:
         return self.cb_platform.currentIndex() == 1
@@ -808,6 +834,7 @@ class MainWindow(QWidget):
             self.sp_hold_max, self.sp_mp_every, self.sp_mp_ms,
             self.sw_drop.switch, self.cb_trigger, self.sp_interval,
             self.sp_every_clicks, self.ed_inv_key, self.cb_close,
+            self.sp_close_presses,
             self.sp_open_wait, self.sp_close_wait, self.sp_type_wait,
             self.sp_drop_wait, self.sp_backspaces, self.sp_fx, self.sp_fy,
             self.sp_dx, self.sp_dy, self.cb_mode, self.ed_window,
@@ -853,6 +880,7 @@ class MainWindow(QWidget):
         drop.every_clicks = self.sp_every_clicks.value()
         drop.inventory_key = self.ed_inv_key.text().strip().lower() or "i"
         drop.close_with = "same" if self.cb_close.currentIndex() == 0 else "esc"
+        drop.close_presses = self.sp_close_presses.value()
         drop.open_wait_ms = self.sp_open_wait.value()
         drop.close_wait_ms = self.sp_close_wait.value()
         drop.after_type_wait_ms = self.sp_type_wait.value()

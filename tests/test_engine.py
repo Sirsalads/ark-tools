@@ -138,12 +138,28 @@ expected = [
     ("click_at", 1400, 900),
     ("click_at", 960, 300),             # clear the filter at the end
     *[("key", hex(0x08))] * 3,
-    ("key", hex(0x49)),                 # close the inventory
+    ("key", hex(0x1B)),                 # Esc leaves the search field
+    ("key", hex(0x1B)),                 # and only then closes the inventory
 ]
 assert calls == expected, f"\nexpected:\n{expected}\ngot:\n{calls}"
 assert not any(c == ("type", "wood") for c in calls), \
     "an unchecked template must not enter the cycle"
 print(f"OK  drop pass order ({len(calls)} actions, unchecked one skipped)")
+
+# --------------------------------------- 1b) the close key is configurable
+for presses, close_with, key in ((1, "same", 0x49), (3, "esc", 0x1B)):
+    calls.clear()
+    cfg.drop.close_presses = presses
+    cfg.drop.close_with = close_with
+    variant = eng.MacroEngine(cfg)
+    variant.log.connect(lambda _m, _l: None)
+    variant._running = True
+    variant._run_drop()
+    tail = calls[-presses:]
+    assert tail == [("key", hex(key))] * presses, tail
+cfg.drop.close_presses = 2
+cfg.drop.close_with = "esc"
+print("OK  close key and press count come from the config")
 
 # ------------------------------------------------- 2) dry run never drops
 calls.clear()
@@ -242,6 +258,33 @@ assert migrated.hotkeys.pick_points == "F10"
 legacy.unlink()
 print("OK  legacy config migration")
 
+# --------------------------------- 8b) configs written before the close fix
+stale = pathlib.Path(tempfile.gettempdir()) / "ark_macro_stale_close.json"
+stale.write_text(json.dumps({
+    "drop": {"close_with": "same", "trigger": "interval", "interval_s": 180},
+}), encoding="utf-8")
+upgraded = Config.load(stale)
+assert upgraded.drop.close_with == "esc", upgraded.drop.close_with
+assert upgraded.drop.close_presses == 2
+assert upgraded.drop.trigger == "clicks" and upgraded.drop.every_clicks == 12
+
+# the old click default follows too, since nobody picked 600 on purpose
+stale.write_text(json.dumps({
+    "drop": {"trigger": "clicks", "every_clicks": 600},
+}), encoding="utf-8")
+assert Config.load(stale).drop.every_clicks == 12
+stale.unlink()
+
+# a timer that was actually chosen is left where it was put
+kept = pathlib.Path(tempfile.gettempdir()) / "ark_macro_kept_timer.json"
+kept.write_text(json.dumps({
+    "drop": {"trigger": "interval", "interval_s": 90, "every_clicks": 400},
+}), encoding="utf-8")
+survivor = Config.load(kept)
+assert survivor.drop.trigger == "interval" and survivor.drop.every_clicks == 400
+kept.unlink()
+print("OK  an old config moves onto the double close and the click trigger")
+
 # ------------------------------------------------- 9) preset risk flags
 assert presets.risk_of("stone")[0] == "high"
 assert presets.risk_of("flint")[0] == "ok"
@@ -258,6 +301,7 @@ broken.write_text(json.dumps({
         "filter_point": "nonsense",
         "dropall_point": [12],
         "points_resolution": None,
+        "close_presses": 0,
         "templates": ["not a dict", {"keyword": "  "}, {"keyword": "thatch"},
                       {"name": "Stone", "keyword": "stone", "enabled": "yes"}],
     },
@@ -266,6 +310,8 @@ salvaged = Config.load(broken)
 assert salvaged.drop.filter_point == [0, 0], salvaged.drop.filter_point
 assert salvaged.drop.dropall_point == [0, 0], salvaged.drop.dropall_point
 assert salvaged.drop.points_resolution == [0, 0]
+# zero presses would leave the inventory open for the rest of the session
+assert salvaged.drop.close_presses == 1, salvaged.drop.close_presses
 assert salvaged.drop.templates == [
     {"name": "thatch", "keyword": "thatch", "enabled": False},
     {"name": "Stone", "keyword": "stone", "enabled": True},
@@ -322,9 +368,10 @@ start = time.perf_counter()
 streamed._run_drop()
 with_stream = time.perf_counter() - start
 
-# one pass has 6 waits, so the allowance should add roughly 6 * 120ms
+# one pass has 8 waits — seven plus the gap between the two close presses —
+# so the allowance should add roughly 8 * 120ms
 added = with_stream - baseline
-assert 0.55 <= added <= 0.95, f"latency allowance added {added:.2f}s"
+assert 0.75 <= added <= 1.15, f"latency allowance added {added:.2f}s"
 print(f"OK  stream latency stretches every wait (+{added:.2f}s at 120ms)")
 
 # ------------------------------------------- 14) letterboxed video area
