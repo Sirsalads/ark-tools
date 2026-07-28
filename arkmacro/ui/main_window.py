@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import pathlib
+import sys
 import time
 
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDoubleSpinBox, QFrame, QGraphicsDropShadowEffect,
@@ -12,7 +13,9 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QPushButton, QScrollArea, QSizeGrip, QSpinBox,
                                QStackedWidget, QVBoxLayout, QWidget)
 
+from .. import __version__
 from .. import layout as ark_layout
+from .. import updater
 from .. import winapi as w
 from ..config import Config
 from ..engine import MacroEngine
@@ -134,6 +137,9 @@ class MainWindow(QWidget):
         self._shot: QPixmap | None = None
         self._shot_origin = (0, 0)
         self._pick_screen = None
+        self._update_worker: updater.UpdateWorker | None = None
+        self._silent_check = False
+        self._restarting = False
 
         self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -163,8 +169,16 @@ class MainWindow(QWidget):
         self._load_thumbs()
         self._refresh_points_status()
         self._maybe_rescale_points()
+        self._refresh_version()
+        self.titlebar.update_pill.clicked.connect(self._open_settings)
         self._log("ready. set the two points on the Points tab before the "
                   "first run.", "info")
+        if self.cfg.app.check_updates_on_start:
+            QTimer.singleShot(1200, lambda: self._check_updates(silent=True))
+
+    def _open_settings(self) -> None:
+        self.nav_group.button(4).setChecked(True)
+        self.stack.setCurrentIndex(4)
 
     # -------------------------------------------------------------- layout
     def _build_ui(self) -> None:
@@ -235,7 +249,7 @@ class MainWindow(QWidget):
                 lay.addSpacing(6)
         lay.addStretch(1)
 
-        version = QLabel("v2.1  ·  companion to A.N.S Watcher")
+        version = QLabel(f"v{__version__}  ·  companion to A.N.S Watcher")
         version.setObjectName("footNote")
         version.setWordWrap(True)
         lay.addWidget(version)
@@ -592,9 +606,49 @@ class MainWindow(QWidget):
         target.add(detect)
         lay.addWidget(target)
 
+        lay.addWidget(self._updates_card())
         lay.addStretch(1)
         self._sync_mode_note()
         return page
+
+    def _updates_card(self) -> Card:
+        card = Card("Updates",
+                    "Pulls straight from the repository this app is published "
+                    "to, then restarts. Your config, captured points and "
+                    "screenshots are never touched.")
+
+        self.lbl_version = hint_label("")
+        card.add(self.lbl_version)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_check = QPushButton("  Check for updates")
+        self.btn_check.setCursor(Qt.PointingHandCursor)
+        self.btn_check.setIcon(icons.icon("target", T.TEXT_DIM, 15))
+        self.btn_check.setIconSize(QSize(15, 15))
+        self.btn_check.clicked.connect(lambda: self._check_updates())
+        self.btn_apply = QPushButton("  Update and restart")
+        self.btn_apply.setObjectName("primary")
+        self.btn_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_apply.setIcon(icons.icon("play", "#04222B", 15))
+        self.btn_apply.setIconSize(QSize(15, 15))
+        self.btn_apply.clicked.connect(self._apply_update)
+        self.btn_apply.hide()
+        row.addWidget(self.btn_check)
+        row.addWidget(self.btn_apply)
+        row.addStretch(1)
+        card.add(row)
+
+        self.lbl_update = hint_label("")
+        card.add(self.lbl_update)
+        self.lbl_commits = hint_label("")
+        self.lbl_commits.hide()
+        card.add(self.lbl_commits)
+
+        self.sw_updates = SwitchRow("Check when the app starts",
+                                    self.cfg.app.check_updates_on_start)
+        card.add(self.sw_updates)
+        return card
 
     def _page_log(self) -> QWidget:
         page, lay = scroll_page()
@@ -663,7 +717,7 @@ class MainWindow(QWidget):
             self.sp_dx, self.sp_dy, self.cb_mode, self.ed_window,
             self.sw_focus.switch, self.sp_delay, self.chk_unicode,
             self.hk_toggle, self.hk_drop, self.hk_panic, self.hk_pick,
-            self.sw_dry.switch,
+            self.sw_dry.switch, self.sw_updates.switch,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -720,6 +774,7 @@ class MainWindow(QWidget):
         keys.drop_now = self.hk_drop.text() or keys.drop_now
         keys.panic = self.hk_panic.text() or keys.panic
         keys.pick_points = self.hk_pick.text() or keys.pick_points
+        self.cfg.app.check_updates_on_start = self.sw_updates.switch.isChecked()
         self._refresh_hotkey_chips()
         self._refresh_points_status()
 
@@ -999,6 +1054,112 @@ class MainWindow(QWidget):
         except OSError as error:
             self._log(f"could not save the capture: {error}", "err")
 
+    # ------------------------------------------------------------- updates
+    def _refresh_version(self) -> None:
+        repo = updater.local_state()
+        if not repo.ok:
+            self.lbl_version.setText(f"v{__version__}  ·  {repo.reason}")
+            self.btn_check.setEnabled(False)
+            return
+        dirty = "  ·  local changes" if repo.dirty else ""
+        self.lbl_version.setText(
+            f"v{__version__}  ·  {repo.branch} @ {repo.sha}  ·  "
+            f"committed {repo.committed}{dirty}")
+
+    def _check_updates(self, silent: bool = False) -> None:
+        if self._update_worker is not None:
+            return
+        self._silent_check = silent
+        self.btn_check.setEnabled(False)
+        if not silent:
+            self.lbl_update.setText("checking…")
+        worker = updater.UpdateWorker("check", self)
+        worker.checked.connect(self._on_update_checked)
+        worker.finished.connect(self._clear_update_worker)
+        self._update_worker = worker
+        worker.start()
+
+    def _clear_update_worker(self) -> None:
+        if self._update_worker is not None:
+            self._update_worker.deleteLater()
+            self._update_worker = None
+        self.btn_check.setEnabled(True)
+
+    def _on_update_checked(self, status: updater.Status) -> None:
+        self._refresh_version()
+        if not status.ok:
+            self.btn_apply.hide()
+            self.lbl_commits.hide()
+            self.lbl_update.setText(f"check failed: {status.error}")
+            if not self._silent_check:
+                self._log(f"update check failed: {status.error}", "err")
+            return
+
+        if status.behind == 0:
+            self.btn_apply.hide()
+            self.lbl_commits.hide()
+            self.titlebar.update_pill.hide()
+            self.lbl_update.setText("you are on the latest commit")
+            if not self._silent_check:
+                self._log("already up to date", "ok")
+            return
+
+        plural = "commit" if status.behind == 1 else "commits"
+        extra = ""
+        if status.ahead:
+            extra += f", {status.ahead} local not pushed"
+        if status.requirements_changed:
+            extra += " — requirements.txt changed, run pip install after"
+        self.lbl_update.setText(f"{status.behind} new {plural} available{extra}")
+        self.lbl_commits.setText("\n".join(f"{sha}  {subject}"
+                                           for sha, subject in status.commits))
+        self.lbl_commits.show()
+        self.btn_apply.setEnabled(not status.dirty)
+        self.btn_apply.show()
+        self.titlebar.update_pill.show()
+        if status.dirty:
+            self.lbl_update.setText(
+                f"{status.behind} new {plural}, but this folder has "
+                "uncommitted changes — commit or discard them first")
+        self._log(f"{status.behind} new {plural} available", "warn")
+
+    def _apply_update(self) -> None:
+        if self._update_worker is not None:
+            return
+        self._stop_macro()
+        self._pull()
+        self._save()
+        self.btn_apply.setEnabled(False)
+        self.lbl_update.setText("updating…")
+        worker = updater.UpdateWorker("apply", self)
+        worker.applied.connect(self._on_update_applied)
+        worker.finished.connect(self._clear_update_worker)
+        self._update_worker = worker
+        worker.start()
+
+    def _on_update_applied(self, ok: bool, message: str) -> None:
+        self._refresh_version()
+        if not ok:
+            self.btn_apply.setEnabled(True)
+            self.lbl_update.setText(f"update failed: {message}")
+            self._log(f"update failed: {message}", "err")
+            return
+        self.lbl_update.setText(f"{message} — restarting…")
+        self._log(f"{message} — restarting", "ok")
+        QTimer.singleShot(700, self._restart)
+
+    def _restart(self) -> None:
+        """Relaunch from the freshly pulled source and quit this instance."""
+        script = ROOT / "main.py"
+        started = QProcess.startDetached(sys.executable, [str(script)],
+                                         str(ROOT))
+        if not started:
+            self._log("could not relaunch — start the app again manually",
+                      "err")
+            return
+        self._restarting = True
+        self.close()
+
     # ------------------------------------------------------------- hotkeys
     def _apply_hotkeys(self, *_args) -> None:
         self._pull()
@@ -1034,6 +1195,8 @@ class MainWindow(QWidget):
     # --------------------------------------------------------------- close
     def closeEvent(self, event) -> None:
         self._stop_macro()
+        if self._update_worker is not None:
+            self._update_worker.wait(3000)
         self._pull()
         self._save()
         self.hotkeys.stop()

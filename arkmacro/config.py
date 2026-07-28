@@ -67,11 +67,17 @@ class Target:
 
 
 @dataclass
+class App:
+    check_updates_on_start: bool = True
+
+
+@dataclass
 class Config:
     autoclick: AutoClick = field(default_factory=AutoClick)
     drop: DropRoutine = field(default_factory=DropRoutine)
     hotkeys: Hotkeys = field(default_factory=Hotkeys)
     target: Target = field(default_factory=Target)
+    app: App = field(default_factory=App)
 
     # -------------------------------------------------------------- io
     # `path` resolves at call time on purpose: a default argument would freeze

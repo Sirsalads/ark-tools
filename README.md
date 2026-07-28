@@ -57,6 +57,22 @@ with height, so the maths also holds on ultrawide: at 1920x1080 it gives filter
 `(277, 193)` and Drop All `(457, 193)`. If you later change resolution, the
 saved points are rescaled automatically on the next start.
 
+## Updating
+
+**Settings → Updates → Check for updates → Update and restart.** The app
+fast-forwards its own clone (`git pull --ff-only`) and relaunches itself, so
+whatever we push here lands on your machine with one click.
+
+- `config.json`, `state/` and `captures/` are gitignored — an update never
+  touches your settings, captured points or dry-run screenshots.
+- It refuses to pull over uncommitted changes instead of stashing them. Commit
+  or discard first.
+- If `requirements.txt` changed, the card says so — run the pip install again.
+- It checks once on startup (toggle in the same card). When something is
+  waiting, an *update available* pill appears in the title bar.
+- Rolling back is plain git: `git reset --hard <sha>`, or `git reflog` to find
+  where you were.
+
 ## Templates
 
 The drop cycle is built from **checkable templates** — a friendly name plus the
@@ -161,6 +177,7 @@ arkmacro/engine.py       farm <-> drop state machine
 arkmacro/config.py       config.json persistence, migrates older formats
 arkmacro/presets.py      ARK template library plus risk notes
 arkmacro/layout.py       HUD geometry model (estimate / rescale points)
+arkmacro/updater.py      self-update by fast-forwarding this clone
 arkmacro/ui/picker.py    frozen-screen point picker with magnifier
 arkmacro/ui/backdrop.py  gradient, glows and the brand melt
 arkmacro/ui/icons.py     vector icons drawn with QPainter
@@ -177,6 +194,7 @@ Run the tests — they never send a real click:
 ```bash
 python tests/test_engine.py
 python tests/test_ui.py
+python tests/test_updater.py
 ```
 
 ## Before you use it

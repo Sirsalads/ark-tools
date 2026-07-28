@@ -64,6 +64,15 @@ QDialog {{ background: {INK}; }}
     font-size: 15px; font-weight: 600; letter-spacing: 3px; color: {TEXT};
 }}
 #logoSub {{ font-size: 11px; color: {MUTED}; letter-spacing: 0.4px; }}
+#updatePill {{
+    background: rgba(64, 220, 240, 0.14);
+    border: 1px solid {GLASS_LINE};
+    border-radius: 13px;
+    color: {ACCENT};
+    font-size: 11px; font-weight: 600;
+    padding: 4px 13px;
+}}
+#updatePill:hover {{ background: rgba(64, 220, 240, 0.26); }}
 #winbtn {{ background: transparent; border: none; border-radius: 7px; }}
 #winbtn:hover {{ background: {GLASS_STRONG}; }}
 #closebtn:hover {{ background: {ERR}; }}

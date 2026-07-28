@@ -637,6 +637,15 @@ class TitleBar(QWidget):
 
         self.status = StatusPill()
         lay.addWidget(self.status)
+
+        # only shows up once a check finds the repo ahead of us
+        self.update_pill = QPushButton("update available")
+        self.update_pill.setObjectName("updatePill")
+        self.update_pill.setCursor(Qt.PointingHandCursor)
+        self.update_pill.setToolTip("Open Settings to install it")
+        self.update_pill.hide()
+        lay.addWidget(self.update_pill)
+
         lay.addStretch(1)
 
         self.minimize = WindowButton("minimize")

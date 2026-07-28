@@ -19,6 +19,7 @@ from PySide6.QtGui import QColor, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from arkmacro import config as config_module  # noqa: E402
+from arkmacro import updater  # noqa: E402
 from arkmacro.config import Config  # noqa: E402
 from arkmacro.ui import icons  # noqa: E402
 from arkmacro.ui.backdrop import Backdrop, load_brand  # noqa: E402
@@ -27,8 +28,11 @@ from arkmacro.ui.picker import ScreenPicker  # noqa: E402
 from arkmacro.ui.theme import QSS  # noqa: E402
 from arkmacro.ui.widgets import FormGrid, PresetDialog, TemplateEditor  # noqa: E402
 
-# keep the real config.json out of the way
+# keep the real config.json out of the way, and never let the tests hit the
+# network through the startup update check
 sandbox = pathlib.Path(tempfile.mkdtemp()) / "config.json"
+sandbox.write_text('{"app": {"check_updates_on_start": false}}',
+                   encoding="utf-8")
 config_module.CONFIG_PATH = sandbox
 
 app = QApplication(sys.argv[:1])
@@ -227,6 +231,37 @@ print("OK  backdrop paints the brand without blowing out the canvas")
 assert APP_NAME == "A.N.S Tools"
 assert win.windowTitle() == APP_NAME
 print("OK  window carries the A.N.S Tools name")
+
+# ------------------------------------------------- 13) update card states
+win.stack.setCurrentIndex(4)
+app.processEvents()
+assert not win.btn_apply.isVisible(), "update button shows before any check"
+assert not win.titlebar.update_pill.isVisible()
+
+win._on_update_checked(updater.Status(ok=True, behind=0))
+assert not win.btn_apply.isVisible() and not win.titlebar.update_pill.isVisible()
+assert "latest" in win.lbl_update.text()
+
+win._on_update_checked(updater.Status(
+    ok=True, behind=2, commits=[("abc1234", "fix drop timing"),
+                                ("def5678", "new preset")],
+    requirements_changed=True))
+assert win.btn_apply.isVisible() and win.btn_apply.isEnabled()
+assert win.titlebar.update_pill.isVisible()
+assert "2 new commits" in win.lbl_update.text()
+assert "requirements.txt" in win.lbl_update.text()
+assert "fix drop timing" in win.lbl_commits.text()
+
+# a dirty working copy offers the button but keeps it locked
+win._on_update_checked(updater.Status(ok=True, behind=1, dirty=True,
+                                      commits=[("abc1234", "wip")]))
+assert win.btn_apply.isVisible() and not win.btn_apply.isEnabled()
+assert "uncommitted" in win.lbl_update.text()
+
+win._on_update_checked(updater.Status(ok=False, error="could not reach origin"))
+assert not win.btn_apply.isVisible()
+assert "could not reach origin" in win.lbl_update.text()
+print("OK  update card reflects every check outcome")
 
 win.hotkeys.stop()
 win.close()
