@@ -17,6 +17,7 @@ import time
 from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
 ULONG_PTR = wintypes.WPARAM
 
@@ -292,6 +293,14 @@ user32.GetSystemMetrics.restype = ctypes.c_int
 user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND,
                                             ctypes.POINTER(wintypes.DWORD))
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetDC.argtypes = (wintypes.HWND,)
+user32.GetDC.restype = wintypes.HDC
+user32.ReleaseDC.argtypes = (wintypes.HWND, wintypes.HDC)
+user32.ReleaseDC.restype = ctypes.c_int
+gdi32.GetPixel.argtypes = (wintypes.HDC, ctypes.c_int, ctypes.c_int)
+gdi32.GetPixel.restype = wintypes.COLORREF
+
+CLR_INVALID = 0xFFFFFFFF
 
 
 def list_windows() -> list[tuple[int, str]]:
@@ -362,6 +371,26 @@ def is_foreground(hwnd: int) -> bool:
 def screen_size() -> tuple[int, int]:
     """Physical resolution of the primary monitor (the process is DPI aware)."""
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+
+
+def screen_pixel(x: int, y: int) -> tuple[int, int, int] | None:
+    """
+    Colour on screen at (x, y), or None when it cannot be read.
+
+    This is how the engine tells an open inventory from a closed one: no way to
+    ask the game, but the panel is right there on screen. Exclusive fullscreen
+    hands back nothing, which is one more reason the app asks for borderless.
+    """
+    hdc = user32.GetDC(None)
+    if not hdc:
+        return None
+    try:
+        value = gdi32.GetPixel(hdc, int(x), int(y))
+    finally:
+        user32.ReleaseDC(None, hdc)
+    if value == CLR_INVALID:
+        return None
+    return value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
 
 
 def client_rect(hwnd: int) -> tuple[int, int, int, int] | None:

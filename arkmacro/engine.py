@@ -17,12 +17,23 @@ from PySide6.QtCore import QObject, QThread, Signal
 from . import winapi as w
 from .config import Config
 
-# gap between the repeated presses that close the inventory: sent back to back
-# the game treats them as one keystroke and the panel stays up
-CLOSE_GAP_MS = 250
+# after a close press: long enough for the panel to be gone before the screen
+# is read, and for the game not to fold two presses into one keystroke
+CLOSE_GAP_MS = 400
 # the close presses are held longer than a normal tap — a 50 ms Esc is easy for
 # the game to miss on the frame it is redrawing the panel
 CLOSE_HOLD = 0.09
+# never sit in the close loop forever; each attempt costs CLOSE_GAP_MS
+CLOSE_ATTEMPTS = 4
+# Where to look to tell an open inventory from a closed one: fractions along the
+# line from the filter field to Drop All, which crosses the panel's icon row.
+# Both ends are avoided — the cursor rests on the filter field and a tooltip
+# there would sit on top of the very pixels being read.
+PANEL_PROBES = (0.25, 0.4, 0.5, 0.6, 0.75)
+# the panel is flat UI, but video streaming and dithering move a channel or two
+PROBE_TOLERANCE = 16
+# how far apart the two points have to be before the probes mean anything
+PROBE_MIN_SPAN = 40
 
 
 class MacroEngine(QThread):
@@ -128,6 +139,98 @@ class MacroEngine(QThread):
                 w.tap(vk, hold=0.015)
             time.sleep(0.02)
 
+    # ------------------------------------------------ is the panel still up
+    def _probe_panel(self) -> list[tuple[int, int, int]] | None:
+        """
+        Colours across the inventory panel, or None when it cannot be read.
+
+        Background delivery is excluded on purpose: the whole point of that mode
+        is that the game is behind other windows, so what is on screen at those
+        coordinates is somebody else's window.
+        """
+        d = self.cfg.drop
+        if self.cfg.target.mode == "background":
+            return None
+        start, end = d.filter_point, d.dropall_point
+        span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+        if not any(end) or span < PROBE_MIN_SPAN:
+            return None
+        colours = []
+        for fraction in PANEL_PROBES:
+            x = round(start[0] + (end[0] - start[0]) * fraction)
+            y = round(start[1] + (end[1] - start[1]) * fraction)
+            colour = w.screen_pixel(x, y)
+            if colour is None:
+                return None
+            colours.append(colour)
+        return colours
+
+    def _panel_still_up(self, reference) -> bool | None:
+        """
+        True while the panel looks like it did before the close press.
+
+        None means the question could not be answered — no reference, or the
+        screen stopped reading — and the caller falls back to counting presses.
+        """
+        if reference is None:
+            return None
+        now = self._probe_panel()
+        if now is None or len(now) != len(reference):
+            return None
+        same = sum(
+            1 for before, after in zip(reference, now)
+            if all(abs(a - b) <= PROBE_TOLERANCE for a, b in zip(before, after))
+        )
+        return same * 2 > len(reference)
+
+    def _close_inventory(self, reference) -> bool:
+        """
+        Press until the panel is gone. Returns False if a stop came in.
+
+        Counting presses cannot win here: one press too few leaves the macro
+        clicking inside the inventory, one too many sends an Esc into the game
+        and opens the pause menu instead. So each press is checked, and the
+        loop stops the moment the panel goes away.
+        """
+        d = self.cfg.drop
+        close_key = "esc" if d.close_with == "esc" else d.inventory_key
+        blind = max(d.close_presses, 1)
+        if reference is None:
+            self.log.emit(f"closing the inventory — {blind}x {close_key}, "
+                          "unchecked", "info")
+        sent = 0
+        while True:
+            self._tap_key(close_key, hold=CLOSE_HOLD)
+            sent += 1
+            if not self._wait(CLOSE_GAP_MS):
+                return False
+            still_up = self._panel_still_up(reference)
+            if still_up is None:            # cannot see the screen: just count
+                if sent >= blind:
+                    return True
+                continue
+            if not still_up:
+                self.log.emit(f"inventory closed after {sent}x {close_key}", "ok")
+                return True
+            if sent >= CLOSE_ATTEMPTS:
+                break
+            self.log.emit(f"inventory still up after {sent}x {close_key} — "
+                          "pressing again", "warn")
+
+        # the configured key is not doing it: the other one is worth one try
+        other = d.inventory_key if close_key == "esc" else "esc"
+        self.log.emit(f"{close_key} did not close the inventory — trying "
+                      f"{other}", "warn")
+        self._tap_key(other, hold=CLOSE_HOLD)
+        if not self._wait(CLOSE_GAP_MS):
+            return False
+        if self._panel_still_up(reference):
+            self.log.emit("the inventory is still open — check the two points "
+                          "on the Points tab, and that ARK is in front", "err")
+        else:
+            self.log.emit(f"inventory closed with {other}", "ok")
+        return True
+
     # ------------------------------------------------------- drop routine
     def _run_drop(self) -> None:
         d = self.cfg.drop
@@ -190,17 +293,14 @@ class MacroEngine(QThread):
 
         # 6) close the inventory. Typing in the filter leaves the search field
         #    holding the keyboard, so the first press only steps out of it and
-        #    the panel is still up — a single Esc left the macro clicking
-        #    inside an open inventory for the rest of the session.
+        #    the panel is still up. How many it takes is not something to
+        #    guess: read the panel now, while it is certainly open, and press
+        #    until those pixels change.
         if not self._wait(250):
             return
-        close_key = "esc" if d.close_with == "esc" else d.inventory_key
-        presses = max(d.close_presses, 1)
-        self.log.emit(f"closing the inventory — {presses}x {close_key}", "info")
-        for index in range(presses):
-            if index and not self._wait(CLOSE_GAP_MS):
-                return
-            self._tap_key(close_key, hold=CLOSE_HOLD)
+        panel = self._probe_panel()
+        if not self._close_inventory(panel):
+            return
         # and stay off the mouse while the panel animates away, or the first
         # swings of the next stretch land on an inventory that is still up
         if not self._wait(d.close_wait_ms):

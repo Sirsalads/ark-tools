@@ -153,9 +153,26 @@ the **search field holding the keyboard**, so the first `Esc` only steps out of
 the field and the second is what actually closes the panel. With a single press
 the inventory stayed open and the macro kept clicking inside it — swings that
 never landed on a node, and a next pass that pressed `I` into an already open
-panel. Set it under **Templates → Inventory and timings → Presses to close**
-(1–5). Closing with the inventory key instead takes a single press; a second
-one just opens it again, so the field follows the key you pick.
+panel.
+
+But a fixed count is the wrong tool, in both directions: one press too few and
+the macro farms inside an open inventory, one too many and the spare `Esc`
+reaches the game and opens the pause menu. So the macro **does not count — it
+looks**. Right before closing, while the panel is certainly up, it reads five
+pixels along the line from the filter field to Drop All (the panel's icon row),
+then presses and re-reads until those pixels change:
+
+```
+23:15:50 closing the inventory
+23:15:51 inventory still up after 1x esc — pressing again
+23:15:51 inventory closed after 2x esc
+```
+
+If four presses go by with the panel still there, it tries the other key once
+(the inventory key when you close with `Esc`, and the reverse) and says so in
+the log. **Presses to close** (1–5, under *Templates → Inventory and timings*)
+is the fallback for when the screen cannot be read — background delivery, or
+exclusive fullscreen. One more reason to run **borderless or windowed**.
 
 After the last press the macro keeps its hands off for **two seconds**
 (*Wait after closing*) — the panel has to be gone before the next swing, or
@@ -225,9 +242,8 @@ path to "farm while I use the PC" is a second machine or a VM.
   clicks and 20 s. Both have to be met, because a click is not a landed hit.
 - **Inventory waits**: raise them on a laggy server. A filter that has not
   refreshed yet is the usual cause of dropping the wrong thing.
-- **Presses to close**: two with `Esc` (one to leave the search field, one to
-  close), one with the inventory key. If a pass ever ends with the inventory
-  still up, this is the setting to raise.
+- **Presses to close**: only consulted when the screen cannot be read; normally
+  the macro checks the panel and presses until it is gone.
 - **Wait after closing**: two seconds by default, the pause before farming
   resumes. Raise it if the panel is still fading when the first swing goes out.
 - **Backspaces to clear**: must be longer than your longest keyword.

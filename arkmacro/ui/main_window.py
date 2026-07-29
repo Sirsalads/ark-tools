@@ -453,8 +453,8 @@ class MainWindow(QWidget):
         igrid.add("Close inventory with", self.cb_close)
         self.sp_close_presses = spin(1, 5, self.cfg.drop.close_presses, "x", 1)
         igrid.add("Presses to close", self.sp_close_presses,
-                  "The search field swallows the first one, so Esc twice is "
-                  "what actually closes the inventory")
+                  "Only used when the screen cannot be read — otherwise the "
+                  "macro checks the panel and presses until it is gone")
         self.sp_open_wait = spin(100, 8000, self.cfg.drop.open_wait_ms, " ms", 50)
         self.sp_type_wait = spin(50, 5000, self.cfg.drop.after_type_wait_ms,
                                  " ms", 50)
@@ -472,8 +472,12 @@ class MainWindow(QWidget):
         timing.add(hint_label(
             "Typing the filter leaves the search field holding the keyboard, "
             "so the first Esc only steps out of it and the second is what "
-            "closes the inventory. Closing with the inventory key instead "
-            "takes a single press — a second one just opens it again."))
+            "closes the inventory. How many it takes is not guessed: the macro "
+            "reads the panel on screen and presses until those pixels change, "
+            "so it never stops with the inventory up and never sends a spare "
+            "Esc into the game. The count above is the fallback for when the "
+            "screen cannot be read — background delivery, or exclusive "
+            "fullscreen."))
         lay.addWidget(timing)
 
         lay.addStretch(1)

@@ -101,6 +101,11 @@ class FakeW:
     def move_cursor(x, y):
         pass
 
+    # unreadable screen by default: the engine falls back to counting presses
+    @staticmethod
+    def screen_pixel(_x, _y):
+        return None
+
 
 eng.w = FakeW
 
@@ -160,6 +165,55 @@ for presses, close_with, key in ((1, "same", 0x49), (3, "esc", 0x1B)):
 cfg.drop.close_presses = 2
 cfg.drop.close_with = "esc"
 print("OK  close key and press count come from the config")
+
+# --------------------------- 1c) with the screen readable, it checks instead
+PANEL = (40, 44, 48)
+WORLD = (120, 160, 90)
+
+
+class Panel:
+    """Screen where the inventory closes after `shuts_at` close presses."""
+
+    def __init__(self, shuts_at: int) -> None:
+        self.shuts_at = shuts_at
+        self.presses = 0
+
+    def pixel(self, _x, _y):
+        return WORLD if self.presses >= self.shuts_at else PANEL
+
+    def tap(self, vk, hold=0.0):
+        calls.append(("key", hex(vk)))
+        if vk == 0x1B:                  # only the close key shuts the panel
+            self.presses += 1
+
+
+def close_with_screen(shuts_at: int) -> list[tuple]:
+    """One drop pass against that screen; returns the keys of the close phase."""
+    screen = Panel(shuts_at)
+    original_tap, original_pixel = FakeW.tap, FakeW.screen_pixel
+    FakeW.tap, FakeW.screen_pixel = screen.tap, screen.pixel
+    try:
+        calls.clear()
+        probe_engine = eng.MacroEngine(cfg)
+        probe_engine.log.connect(lambda _m, _l: None)
+        probe_engine._running = True
+        probe_engine._run_drop()
+    finally:
+        FakeW.tap, FakeW.screen_pixel = original_tap, original_pixel
+    # everything after the last Drop All click is the close phase
+    last_drop = max(i for i, c in enumerate(calls) if c == ("click_at", 1400, 900))
+    return [c for c in calls[last_drop:] if c[0] == "key" and c[1] == hex(0x1B)]
+
+# one press is enough on this setup: a second Esc would reach the game and
+# open the pause menu, so it must not be sent
+assert close_with_screen(1) == [("key", hex(0x1B))], "it overshot a closed panel"
+# the search field ate the first one, so it presses again — and then stops
+assert close_with_screen(2) == [("key", hex(0x1B))] * 2
+# a panel that never closes is capped, then the other key gets one try
+stubborn = close_with_screen(99)
+assert len(stubborn) == eng.CLOSE_ATTEMPTS, stubborn
+print(f"OK  the close checks the panel: 1 press when 1 is enough, "
+      f"{eng.CLOSE_ATTEMPTS} at most")
 
 # ------------------------------------------------- 2) dry run never drops
 calls.clear()
@@ -391,10 +445,10 @@ start = time.perf_counter()
 streamed._run_drop()
 with_stream = time.perf_counter() - start
 
-# one pass has 8 waits — seven plus the gap between the two close presses —
-# so the allowance should add roughly 8 * 120ms
+# one pass has 9 waits — seven, plus one after each of the two close presses —
+# so the allowance should add roughly 9 * 120ms
 added = with_stream - baseline
-assert 0.75 <= added <= 1.15, f"latency allowance added {added:.2f}s"
+assert 0.85 <= added <= 1.30, f"latency allowance added {added:.2f}s"
 print(f"OK  stream latency stretches every wait (+{added:.2f}s at 120ms)")
 
 # ------------------------------------------- 14) letterboxed video area
