@@ -19,7 +19,10 @@ from .config import Config
 
 # gap between the repeated presses that close the inventory: sent back to back
 # the game treats them as one keystroke and the panel stays up
-CLOSE_GAP_MS = 180
+CLOSE_GAP_MS = 250
+# the close presses are held longer than a normal tap — a 50 ms Esc is easy for
+# the game to miss on the frame it is redrawing the panel
+CLOSE_HOLD = 0.09
 
 
 class MacroEngine(QThread):
@@ -97,15 +100,15 @@ class MacroEngine(QThread):
             w.click_at(x, y, "left", hold=0.05, settle=0.08)
         self.log.emit(f"clicked {label} at ({x}, {y})", "info")
 
-    def _tap_key(self, name: str) -> None:
+    def _tap_key(self, name: str, hold: float = 0.05) -> None:
         vk = w.vk_from_name(name)
         if vk is None:
             self.log.emit(f"unknown key: {name}", "err")
             return
         if self.cfg.target.mode == "background" and self._hwnd:
-            w.post_key(self._hwnd, vk, 0.04)
+            w.post_key(self._hwnd, vk, hold)
         else:
-            w.tap(vk, hold=0.05)
+            w.tap(vk, hold=hold)
 
     def _type(self, text: str) -> None:
         if self.cfg.target.mode == "background" and self._hwnd:
@@ -197,7 +200,9 @@ class MacroEngine(QThread):
         for index in range(presses):
             if index and not self._wait(CLOSE_GAP_MS):
                 return
-            self._tap_key(close_key)
+            self._tap_key(close_key, hold=CLOSE_HOLD)
+        # and stay off the mouse while the panel animates away, or the first
+        # swings of the next stretch land on an inventory that is still up
         if not self._wait(d.close_wait_ms):
             return
 
@@ -250,7 +255,13 @@ class MacroEngine(QThread):
                 if d.trigger == "interval":
                     due = (time.perf_counter() - last_drop) >= d.interval_s
                 elif d.trigger == "clicks":
-                    due = clicks_since_drop >= max(d.every_clicks, 1)
+                    # the count alone is not a measure of swings: a dino with
+                    # its own attack cooldown eats fourteen clicks in two
+                    # seconds and lands three hits, so a minimum stretch of
+                    # farming has to pass as well
+                    farmed = time.perf_counter() - last_drop
+                    due = (clicks_since_drop >= max(d.every_clicks, 1)
+                           and farmed >= d.min_farm_s)
 
             ready, reason = self._focus_ok()
 

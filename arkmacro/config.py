@@ -27,14 +27,19 @@ class DropRoutine:
     enabled: bool = True
     trigger: str = "clicks"        # interval | clicks | manual
     interval_s: int = 180
-    every_clicks: int = 12
+    every_clicks: int = 14
+    # clicks are not swings: a dino with an attack cooldown burns through the
+    # count in seconds, so the pass also waits out a stretch of real farming
+    min_farm_s: int = 20
     inventory_key: str = "i"
     close_with: str = "esc"        # same | esc
     # ARK's search field keeps the keyboard after the filter is typed, so the
     # first key press only leaves the field — the panel itself needs another
     close_presses: int = 2
     open_wait_ms: int = 1100
-    close_wait_ms: int = 700
+    # two seconds of hands off after the last press: the panel has to be gone
+    # before the next swing, or the click lands in the inventory again
+    close_wait_ms: int = 2000
     filter_point: list[int] = field(default_factory=lambda: [0, 0])
     dropall_point: list[int] = field(default_factory=lambda: [0, 0])
     # screen size when the points were captured, used to rescale them later
@@ -147,7 +152,15 @@ def _migrate(cfg: "Config", raw: dict) -> None:
             cfg.drop.trigger = "clicks"
         if untouched or (drop.get("trigger") == "clicks"
                          and drop.get("every_clicks", 600) == 600):
-            cfg.drop.every_clicks = 12
+            cfg.drop.every_clicks = 14
+
+    # a pass that was still resuming after 700 ms was clicking into a panel
+    # that had not gone away yet, and fourteen clicks read better than twelve
+    if "min_farm_s" not in drop:
+        if drop.get("every_clicks", 600) in (12, 600):
+            cfg.drop.every_clicks = 14
+        if drop.get("close_wait_ms", 700) == 700:
+            cfg.drop.close_wait_ms = 2000
 
     legacy = drop.get("keywords")
     if legacy and "templates" not in drop:
@@ -202,6 +215,7 @@ def _sanitize(cfg: "Config") -> None:
     drop.points_resolution = _point(drop.points_resolution)
     # zero presses would leave the inventory open for the rest of the session
     drop.close_presses = _count(drop.close_presses, 2, 1, 5)
+    drop.min_farm_s = _count(drop.min_farm_s, 20, 0, 3600)
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

@@ -122,13 +122,16 @@ win.cb_trigger.setCurrentIndex(0)
 app.processEvents()
 assert win.sp_interval.isVisible() and win.lbl_interval.isVisible()
 assert not win.sp_every_clicks.isVisible() and not win.lbl_clicks.isVisible()
+assert not win.sp_min_farm.isVisible(), "the farm stretch belongs to clicks"
 win.cb_trigger.setCurrentIndex(1)
 app.processEvents()
 assert win.sp_every_clicks.isVisible() and win.lbl_clicks.isVisible()
+assert win.sp_min_farm.isVisible() and win.lbl_min_farm.isVisible()
 assert not win.sp_interval.isVisible() and not win.lbl_interval.isVisible()
 win.cb_trigger.setCurrentIndex(2)
 app.processEvents()
 assert not win.sp_interval.isVisible() and not win.sp_every_clicks.isVisible()
+assert not win.sp_min_farm.isVisible() and not win.hint_min_farm.isVisible()
 print("OK  trigger fields show and hide with the label")
 
 # ------------------------------------------------- 5) config round trip
@@ -137,6 +140,7 @@ win.cb_mode.setCurrentIndex(1)
 win.sp_cps_min.setValue(11.5)
 win.ed_inv_key.setText("TAB")
 win.sp_close_presses.setValue(3)
+win.sp_min_farm.setValue(35)
 win.hk_toggle.setText("Ctrl+F5")
 win.sp_fx.setValue(277)
 win.sp_fy.setValue(193)
@@ -149,6 +153,7 @@ assert reloaded.target.mode == "background"
 assert reloaded.autoclick.cps_min == 11.5
 assert reloaded.drop.inventory_key == "tab", reloaded.drop.inventory_key
 assert reloaded.drop.close_presses == 3, reloaded.drop.close_presses
+assert reloaded.drop.min_farm_s == 35, reloaded.drop.min_farm_s
 assert reloaded.hotkeys.toggle == "Ctrl+F5"
 assert reloaded.drop.filter_point == [277, 193]
 assert reloaded.drop.templates == win.cfg.drop.templates

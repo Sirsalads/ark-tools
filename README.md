@@ -137,8 +137,8 @@ All rebindable on the **Settings** tab.
 
 ## One drop pass, step by step
 
-Fired on a click count (**every 12 clicks** by default), on a timer, or by
-`F7`:
+Fired on a click count (**14 clicks and at least 20 s of farming** by default),
+on a timer, or by `F7`:
 
 1. pause the autoclick and press the inventory key (`I` by default);
 2. click the filter field and wipe the previous text with backspaces;
@@ -156,6 +156,19 @@ never landed on a node, and a next pass that pressed `I` into an already open
 panel. Set it under **Templates → Inventory and timings → Presses to close**
 (1–5). Closing with the inventory key instead takes a single press; a second
 one just opens it again, so the field follows the key you pick.
+
+After the last press the macro keeps its hands off for **two seconds**
+(*Wait after closing*) — the panel has to be gone before the next swing, or
+that swing lands in the inventory and the whole thing starts over.
+
+## Clicks are not swings
+
+The click trigger counts clicks, and clicks are free: a dino with its own
+attack cooldown eats fourteen of them in two seconds and lands three hits.
+So the pass waits for **both** conditions — the click count **and** a minimum
+stretch of farming, 20 s by default (**Templates → When it runs → Farm for at
+least**). Raise it for a slow attack animation, drop it to zero to go back to
+counting clicks alone.
 
 ## GeForce NOW
 
@@ -208,13 +221,15 @@ path to "farm while I use the PC" is a second machine or a VM.
 - **Min/max speed (cps)**: drawn at random on every click so the rhythm is not
   metronomic. Hold time counts towards the period, so 9 cps really is 9 cps.
 - **Micro pauses**: a short breather every N clicks.
-- **Run every N clicks**: the default trigger, at 12 — a dozen swings, then the
-  inventory pass, then straight back to farming.
+- **Run every N clicks** / **Farm for at least**: the default trigger, 14
+  clicks and 20 s. Both have to be met, because a click is not a landed hit.
 - **Inventory waits**: raise them on a laggy server. A filter that has not
   refreshed yet is the usual cause of dropping the wrong thing.
 - **Presses to close**: two with `Esc` (one to leave the search field, one to
   close), one with the inventory key. If a pass ever ends with the inventory
   still up, this is the setting to raise.
+- **Wait after closing**: two seconds by default, the pause before farming
+  resumes. Raise it if the panel is still fading when the first swing goes out.
 - **Backspaces to clear**: must be longer than your longest keyword.
 - **Unicode typing**: only if the search field ignores the letters.
 - **Window title**: the fragment is matched against every open window, so keep

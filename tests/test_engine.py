@@ -199,6 +199,7 @@ calls.clear()
 cfg.drop.enabled = True
 cfg.drop.trigger = "clicks"
 cfg.drop.every_clicks = 5
+cfg.drop.min_farm_s = 0
 states: list[str] = []
 click_engine = eng.MacroEngine(cfg)
 click_engine.state_changed.connect(states.append)
@@ -211,6 +212,23 @@ passes = sum(1 for c in calls if c == ("click_at", 1400, 900))
 assert passes >= 2, "click-count trigger never fired"
 assert "dropping" in states and "farming" in states
 print(f"OK  click-count trigger ({passes} passes)")
+
+# ----------------------------- 4b) the count alone does not open the panel
+# a dino with an attack cooldown burns the clicks in seconds; the pass has to
+# wait out the farming stretch as well
+calls.clear()
+cfg.drop.min_farm_s = 30
+gated_engine = eng.MacroEngine(cfg)
+gated_engine.log.connect(lambda _m, _l: None)
+gated_engine.start()
+pump(1.5)
+gated_engine.request_stop()
+gated_engine.wait(3000)
+assert sum(1 for c in calls if c[0] == "click") > 5, "it stopped farming"
+assert not any(c == ("click_at", 1400, 900) for c in calls), \
+    "the pass ran before the farming stretch was up"
+cfg.drop.min_farm_s = 0
+print("OK  the click trigger waits out the farming stretch too")
 
 # ------------------------------------------------- 5) timer trigger
 calls.clear()
@@ -266,22 +284,27 @@ stale.write_text(json.dumps({
 upgraded = Config.load(stale)
 assert upgraded.drop.close_with == "esc", upgraded.drop.close_with
 assert upgraded.drop.close_presses == 2
-assert upgraded.drop.trigger == "clicks" and upgraded.drop.every_clicks == 12
+assert upgraded.drop.trigger == "clicks" and upgraded.drop.every_clicks == 14
+assert upgraded.drop.close_wait_ms == 2000, upgraded.drop.close_wait_ms
 
-# the old click default follows too, since nobody picked 600 on purpose
-stale.write_text(json.dumps({
-    "drop": {"trigger": "clicks", "every_clicks": 600},
-}), encoding="utf-8")
-assert Config.load(stale).drop.every_clicks == 12
+# the old click defaults follow too — nobody picked 600, or 12, on purpose
+for old_count in (600, 12):
+    stale.write_text(json.dumps({
+        "drop": {"trigger": "clicks", "every_clicks": old_count,
+                 "close_presses": 2},
+    }), encoding="utf-8")
+    assert Config.load(stale).drop.every_clicks == 14, old_count
 stale.unlink()
 
 # a timer that was actually chosen is left where it was put
 kept = pathlib.Path(tempfile.gettempdir()) / "ark_macro_kept_timer.json"
 kept.write_text(json.dumps({
-    "drop": {"trigger": "interval", "interval_s": 90, "every_clicks": 400},
+    "drop": {"trigger": "interval", "interval_s": 90, "every_clicks": 400,
+             "close_wait_ms": 1200},
 }), encoding="utf-8")
 survivor = Config.load(kept)
 assert survivor.drop.trigger == "interval" and survivor.drop.every_clicks == 400
+assert survivor.drop.close_wait_ms == 1200, "clobbered a chosen wait"
 kept.unlink()
 print("OK  an old config moves onto the double close and the click trigger")
 

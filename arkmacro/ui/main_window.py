@@ -403,9 +403,19 @@ class MainWindow(QWidget):
         # a dozen swings is a normal pass on a rich node, so the step is one
         self.sp_every_clicks = spin(1, 100000, self.cfg.drop.every_clicks,
                                     " clicks", 1)
+        self.sp_min_farm = spin(0, 3600, self.cfg.drop.min_farm_s, " s", 5)
         self.lbl_interval = tgrid.add("Interval", self.sp_interval)
         self.lbl_clicks = tgrid.add("Run every", self.sp_every_clicks)
+        self.lbl_min_farm = tgrid.add("Farm for at least", self.sp_min_farm,
+                                      "Both have to be met before the pass "
+                                      "runs: the clicks and the time")
         trigger.add(tgrid)
+        self.hint_min_farm = hint_label(
+            "Clicks are not swings — a dino with its own attack cooldown burns "
+            "through fourteen clicks in two seconds and lands three hits. The "
+            "stretch makes sure real farming happened before the inventory "
+            "opens. Zero turns it off and goes back to counting clicks alone.")
+        trigger.add(self.hint_min_farm)
         lay.addWidget(trigger)
 
         card = Card("Drop list")
@@ -732,6 +742,9 @@ class MainWindow(QWidget):
         self.sp_interval.setVisible(index == 0)
         self.lbl_clicks.setVisible(index == 1)
         self.sp_every_clicks.setVisible(index == 1)
+        self.lbl_min_farm.setVisible(index == 1)
+        self.sp_min_farm.setVisible(index == 1)
+        self.hint_min_farm.setVisible(index == 1)
 
     def _sync_close_presses(self) -> None:
         """
@@ -833,7 +846,8 @@ class MainWindow(QWidget):
             self.cb_button, self.sp_cps_min, self.sp_cps_max, self.sp_hold_min,
             self.sp_hold_max, self.sp_mp_every, self.sp_mp_ms,
             self.sw_drop.switch, self.cb_trigger, self.sp_interval,
-            self.sp_every_clicks, self.ed_inv_key, self.cb_close,
+            self.sp_every_clicks, self.sp_min_farm, self.ed_inv_key,
+            self.cb_close,
             self.sp_close_presses,
             self.sp_open_wait, self.sp_close_wait, self.sp_type_wait,
             self.sp_drop_wait, self.sp_backspaces, self.sp_fx, self.sp_fy,
@@ -878,6 +892,7 @@ class MainWindow(QWidget):
                         "manual"][self.cb_trigger.currentIndex()]
         drop.interval_s = self.sp_interval.value()
         drop.every_clicks = self.sp_every_clicks.value()
+        drop.min_farm_s = self.sp_min_farm.value()
         drop.inventory_key = self.ed_inv_key.text().strip().lower() or "i"
         drop.close_with = "same" if self.cb_close.currentIndex() == 0 else "esc"
         drop.close_presses = self.sp_close_presses.value()
