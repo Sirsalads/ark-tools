@@ -629,6 +629,18 @@ assert win._sweep_timer.isActive(), "letting go stopped a toggled sweep"
 assert len(taps) == 4, f"a toggled sweep sent {len(taps)} presses for 4 slots"
 assert set(taps) == {0x4F}, taps
 
+# the press is short next to the tick: it runs on the UI thread, so a hold as
+# long as the dwell would stall the window and stack the timers up
+holds: list[float] = []
+w_module.tap = lambda vk, hold=0.0: (taps.append(vk), holds.append(hold))
+win.sp_hold_dwell.setValue(15)              # someone chasing speed
+win._pull()
+win._sweep_step()
+assert holds and holds[-1] <= 0.015 / 2, f"a {holds[-1]:.3f}s press in a 15ms tick"
+win.sp_hold_dwell.setValue(40)
+win._pull()
+w_module.tap = lambda vk, hold=0.0: taps.append(vk)
+
 # the next press stops it, and the cursor goes back
 held["down"] = True
 win._watch_hold_key()

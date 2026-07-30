@@ -1377,8 +1377,12 @@ class MainWindow(QWidget):
             self._stop_sweep()
             return
         if hold.mode == "toggle":
-            # the cursor has been resting on this slot for a full dwell
-            w.tap(vk, hold=0.03)
+            # The cursor has been resting on this slot for a full dwell. The
+            # press is held for a third of that and never more than 25 ms: this
+            # runs on the UI thread, so a hold as long as the tick would stall
+            # the window and let the timers pile up behind each other — which is
+            # exactly what happens when someone lowers the dwell chasing speed.
+            w.tap(vk, hold=min(0.025, hold.dwell_ms / 3000.0))
         x, y = self._sweep_path[self._sweep_index % len(self._sweep_path)]
         w.move_cursor(x, y)
         self._sweep_index += 1
