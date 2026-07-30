@@ -122,14 +122,20 @@ class HoldDrop:
 @dataclass
 class SkinOvercap:
     """
-    Runs the cursor back and forth along a strip while Shift + a key is held.
+    Runs the cursor along a strip with Shift + a hotbar key held down.
 
-    Same shape as hold-to-drop and the same reason for it: your fingers hold the
-    chord, so ARK keeps receiving it, and the app only has to move the mouse.
+    Two different keys, and they must not be confused. `activate_key` is the one
+    you press: it belongs to the app and does nothing in the game. Shift and
+    `key` are the instruction — the chord the macro itself holds while it
+    sweeps, so your hands are free.
     """
 
     enabled: bool = False
-    key: str = "2"                  # held together with Shift
+    activate_key: str = "f4"        # yours, to start and stop the macro
+    # hold   -> runs while you hold the activation key
+    # toggle -> one press starts it, another stops it
+    mode: str = "toggle"
+    key: str = "2"                  # the hotbar slot the macro holds with Shift
     area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # x,y,w,h
     area_resolution: list[int] = field(default_factory=lambda: [0, 0])
     stops: int = 10                 # points across the strip, one per hotbar slot
@@ -334,6 +340,9 @@ def _sanitize(cfg: "Config") -> None:
     skin.stops = _count(skin.stops, 10, 2, 40)
     skin.dwell_ms = _count(skin.dwell_ms, 40, 5, 1000)
     skin.key = str(skin.key).strip().lower()
+    skin.activate_key = str(skin.activate_key).strip().lower()
+    skin.mode = ("hold" if str(skin.mode).strip().lower() == "hold"
+                 else "toggle")
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

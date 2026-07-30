@@ -710,57 +710,101 @@ held["down"] = False
 print("OK  hold-to-drop refuses while farming, unfocused, picking or misbound")
 
 # ------------------------------------------------- 23) skin overcap
-# Shift plus a hotbar key runs the cursor along a strip. Same machinery as
-# hold-to-drop, a different path and a chord instead of one key.
+# Two different keys, and the distinction is the feature: the activation key is
+# yours and only tells the app to start, and the chord is the game's — held by
+# the macro, not by you. Pressing the chord to start a macro that holds the
+# chord would be a circle.
 moves.clear()
 taps.clear()
-chord = {"shift": False, "key": False}
-w_module.key_is_down = lambda vk: (chord["shift"] if vk == 0x10
-                                   else chord["key"])
+downs: list[int] = []
+ups: list[int] = []
+w_module.key_down = lambda vk: downs.append(vk)
+w_module.key_up = lambda vk: ups.append(vk)
+activate = {"down": False}
+w_module.key_is_down = lambda vk: activate["down"] and vk == 0x73    # F4
 win.cfg.skin_overcap.area = [100, 900, 600, 80]
 win.cfg.skin_overcap.area_resolution = list(w_module.screen_size())
 win.sw_skin.switch.setChecked(True)
+win.ed_skin_activate.setText("f4")
+win.cb_skin_mode.setCurrentIndex(0)         # press to start and stop
 win.cb_skin_key.setCurrentText("2")
 win.sp_skin_stops.setValue(10)
 win.sp_skin_dwell.setValue(5)
 win._pull()
 assert win._hold_watch.isActive(), "a ready strip did not arm the watcher"
 assert "18 a full lap" in win.lbl_skin_area.text(), win.lbl_skin_area.text()
+assert "F4" in win.skin_note.text() and "2" in win.skin_note.text()
 
-# the key alone is not the chord, and neither is Shift alone
-chord["key"] = True
+# the press starts it, and the macro takes Shift + the slot down itself
+activate["down"] = True
 win._watch_skin_key()
-assert not win._sweep_timer.isActive(), "ran on the key without Shift"
-chord["key"], chord["shift"] = False, True
-win._watch_skin_key()
-assert not win._sweep_timer.isActive(), "ran on Shift alone"
-assert moves == [], f"moved the mouse without the chord: {moves}"
+assert win._sweep_timer.isActive(), "the activation key did not start it"
+assert downs == [0x10, 0x32], f"the macro did not hold Shift+2: {downs}"
+assert ups == [], "it let go of the chord straight away"
 
-# both down: it runs the strip, out and back, and sends no keys of its own
-chord["key"] = True
-win._watch_skin_key()
-assert win._sweep_timer.isActive(), "the chord did not start the strip"
+# it keeps running with the activation key released — that is the toggle
+activate["down"] = False
 for _ in range(17):
+    win._watch_skin_key()
     win._sweep_step()
+assert win._sweep_timer.isActive(), "letting go of the activation key stopped it"
 assert len(moves) == 18, f"{len(moves)} moves for a full lap"
 assert all(y == 940 for _x, y in moves), "it left the middle of the strip"
 assert moves[9][0] == max(x for x, _y in moves), "it never reached the far end"
 assert moves[-1][0] < moves[9][0], "it did not come back"
-assert taps == [], f"skin overcap pressed keys of its own: {taps}"
 
-# breaking the chord stops it within one stop, and the cursor goes back
-chord["shift"] = False
-win._sweep_step()
-assert not win._sweep_timer.isActive(), "kept running with Shift released"
-assert moves[-1] == (7, 9), f"the cursor was left on the strip: {moves[-1]}"
-print("OK  skin overcap runs the strip on the chord, and sends nothing")
-
-# ------------------------- 23b) the two sweeps never share the cursor
-chord["shift"], chord["key"] = True, True
+# the next press stops it, and the chord comes back up in reverse order
+activate["down"] = True
 win._watch_skin_key()
-assert win._sweep_kind == "skin"
-# hold-to-drop is armed too, and its key reads as down through the same fake —
-# it must not take the cursor from a strip that is already running
+assert not win._sweep_timer.isActive(), "the second press did not stop it"
+assert ups == [0x32, 0x10], f"the chord was not released cleanly: {ups}"
+assert moves[-1] == (7, 9), f"the cursor was left on the strip: {moves[-1]}"
+print("OK  skin overcap holds the chord for you, and lets go on the way out")
+
+# ------------------------- 23b) the Shift must never be left down
+for leave in ("focus", "close"):
+    downs.clear()
+    ups.clear()
+    # the watcher reads the key's edge, so it has to see the release first
+    activate["down"] = False
+    win._watch_skin_key()
+    activate["down"] = True
+    win._watch_skin_key()
+    activate["down"] = False
+    assert win._chord_held, "the macro is not holding the chord"
+    if leave == "focus":
+        w_module.is_foreground = lambda _h: False
+        win._sweep_step()
+        w_module.is_foreground = lambda _h: True
+    else:
+        win._stop_sweep()
+    assert not win._chord_held, f"the chord survived losing {leave}"
+    assert ups == [0x32, 0x10], f"Shift was left down after {leave}: {ups}"
+print("OK  the held chord is released by every route out of a sweep")
+
+# ------------------------- 23c) the two keys have to be different
+win.ed_skin_activate.setText("2")           # the slot the macro holds
+win._pull()
+assert "different one" in win.skin_note.text(), win.skin_note.text()
+win.ed_skin_activate.setText("shift")
+win._pull()
+assert "different one" in win.skin_note.text(), win.skin_note.text()
+downs.clear()
+win._watch_skin_key()
+assert not win._sweep_timer.isActive() and not downs, "ran on a circular bind"
+assert not win.sw_skin.switch.isChecked(), "a circular bind was left armed"
+win.ed_skin_activate.setText("f4")
+print("OK  the activation key cannot be part of the chord the macro holds")
+
+# ------------------------- 23d) the two sweeps never share the cursor
+win.sw_skin.switch.setChecked(True)
+win._pull()
+activate["down"] = False
+win._watch_skin_key()                       # let the watcher see the release
+activate["down"] = True
+win._watch_skin_key()
+assert win._sweep_kind == "skin", "the strip did not start"
+# hold-to-drop is armed too; it must not take the cursor from a running strip
 win._watch_hold_key()
 assert win._sweep_kind == "skin", "hold-to-drop hijacked a running strip"
 win._stop_sweep()
@@ -768,7 +812,7 @@ assert win._sweep_kind == "", "the kind outlived the sweep"
 
 win.sw_skin.switch.setChecked(False)
 win._pull()
-chord["shift"] = chord["key"] = False
+activate["down"] = False
 w_module.key_is_down = lambda _vk: held["down"]
 print("OK  hold-to-drop and skin overcap never run at the same time")
 

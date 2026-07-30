@@ -194,6 +194,9 @@ class MainWindow(QWidget):
         self._sweep_return: tuple[int, int] | None = None
         self._sweep_hwnd: int | None = None
         self._pick_area_kind = "drop"
+        self._skin_was_down = False
+        # whether the macro currently has Shift + a slot pressed down
+        self._chord_held = False
         self._hold_refused = False
         # toggling acts on the press, so the level has to be remembered between
         # ticks to tell a new press from a key that is simply still down
@@ -618,17 +621,27 @@ class MainWindow(QWidget):
         skin = self.cfg.skin_overcap
         card = Card(
             "Skin overcap",
-            "Hold Shift and a hotbar key, and the cursor runs the strip below "
-            "end to end and back, in a loop, for as long as you hold them.")
-        self.sw_skin = SwitchRow("Run the strip with Shift + a key",
-                                 skin.enabled)
+            "Press your key and the macro holds Shift + a hotbar slot for you "
+            "while the cursor runs the strip below end to end and back, in a "
+            "loop. Your hands stay free.")
+        self.sw_skin = SwitchRow("Run the strip on a key", skin.enabled)
         card.add(self.sw_skin)
 
         sgrid = FormGrid(pairs=2)
+        self.ed_skin_activate = QLineEdit(skin.activate_key)
+        self.ed_skin_activate.setMaxLength(10)
+        self.ed_skin_activate.setFixedWidth(124)
+        self.ed_skin_activate.setAlignment(Qt.AlignCenter)
+        sgrid.add("Start it with", self.ed_skin_activate,
+                  "Yours, not the game's. Pick something ARK has nothing bound "
+                  "to — it reaches the game as well")
+        self.cb_skin_mode = combo(["Press to start and stop", "Hold the key"],
+                                  1 if skin.mode == "hold" else 0, width=230)
+        sgrid.add("How it runs", self.cb_skin_mode)
         self.cb_skin_key = combo(HOTBAR, HOTBAR.index(skin.key)
                                  if skin.key in HOTBAR else 1, width=124)
-        sgrid.add("Shift +", self.cb_skin_key,
-                  "The hotbar slot you hold together with Shift")
+        sgrid.add("Macro holds Shift +", self.cb_skin_key,
+                  "The hotbar slot the macro presses and holds while it sweeps")
         self.sp_skin_dwell = spin(5, 1000, skin.dwell_ms, " ms", 5)
         sgrid.add("Time per stop", self.sp_skin_dwell)
         self.sp_skin_stops = spin(2, 40, skin.stops, "", 1)
@@ -637,6 +650,8 @@ class MainWindow(QWidget):
                   "per hotbar slot is the usual answer")
         sgrid.skip()
         card.add(sgrid)
+        self.skin_note = hint_label("")
+        card.add(self.skin_note)
 
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -654,10 +669,11 @@ class MainWindow(QWidget):
         card.add(hint_label(
             "Drag the box over your hotbar. Only the middle of the box is "
             "swept — it is one row, so the height only has to cover the slots. "
-            "The app sends no keys here at all: your fingers hold the chord, "
-            "and it moves the mouse. Same guards as hold-to-drop — ARK in "
-            "front, macro stopped — and the two never run at once, because "
-            "there is one cursor."))
+            "The chord goes down when the sweep starts and comes back up when "
+            "it ends, by every route out including losing focus and closing the "
+            "app — a Shift left down would follow you into everything else you "
+            "type. Same guards as hold-to-drop, and the two never run at once "
+            "because there is one cursor."))
         return card
 
     # ------------------------------------------------------- hold to drop
@@ -1131,7 +1147,7 @@ class MainWindow(QWidget):
             self.sw_hold.switch, self.ed_hold_key, self.sp_hold_cols,
             self.sp_hold_rows, self.sp_hold_dwell, self.cb_hold_mode,
             self.sw_skin.switch, self.cb_skin_key, self.sp_skin_stops,
-            self.sp_skin_dwell,
+            self.sp_skin_dwell, self.ed_skin_activate, self.cb_skin_mode,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -1201,6 +1217,8 @@ class MainWindow(QWidget):
 
         skin = self.cfg.skin_overcap
         skin.enabled = self.sw_skin.switch.isChecked()
+        skin.activate_key = self.ed_skin_activate.text().strip().lower() or "f4"
+        skin.mode = "hold" if self.cb_skin_mode.currentIndex() == 1 else "toggle"
         skin.key = self.cb_skin_key.currentText()
         skin.stops = self.sp_skin_stops.value()
         skin.dwell_ms = self.sp_skin_dwell.value()
@@ -1359,6 +1377,18 @@ class MainWindow(QWidget):
 
     def _refresh_skin_status(self) -> None:
         skin = self.cfg.skin_overcap
+        problem = self._skin_problem()
+        if problem:
+            self.skin_note.setText(
+                f"{problem[0].upper()}{problem[1:]}. Skin overcap will refuse "
+                "to run.")
+        else:
+            starts = ("Hold" if skin.mode == "hold" else "Press")
+            self.skin_note.setText(
+                f"{starts} «{skin.activate_key.upper()}» and the macro holds "
+                f"Shift+«{skin.key.upper()}» while it sweeps. Two different "
+                "keys on purpose: the one you press is the app's, the chord is "
+                "the game's.")
         if not sweep.usable(skin.area):
             self.lbl_skin_area.setText(
                 "No strip selected yet — skin overcap will not do anything "
@@ -1371,8 +1401,7 @@ class MainWindow(QWidget):
         where = f", captured at {res[0]}x{res[1]}" if res and all(res) else ""
         self.lbl_skin_area.setText(
             f"{width}x{height} px at ({x}, {y}){where} — {skin.stops} stops "
-            f"each way, {path} a full lap, about {pace:.1f}s. It runs while "
-            f"Shift+«{skin.key.upper()}» is held.")
+            f"each way, {path} a full lap, about {pace:.1f}s.")
 
     def _can_sweep(self) -> bool:
         """Whether it is safe to start a sweep right now, and say why not once."""
@@ -1429,36 +1458,58 @@ class MainWindow(QWidget):
         if self._can_sweep():
             self._start_drop_sweep()
 
+    def _skin_problem(self) -> str:
+        """Why skin overcap cannot run, or "" when it can."""
+        skin = self.cfg.skin_overcap
+        if w.vk_from_name(skin.activate_key) is None:
+            return f'the activation key "{skin.activate_key}" is not a key name'
+        if w.vk_from_name(skin.key) is None:
+            return f'the hotbar slot "{skin.key}" is not a key name'
+        # the whole point of two keys: pressing the chord to start a macro whose
+        # job is to hold that chord is a circle
+        if skin.activate_key in (skin.key, "shift"):
+            return ("the activation key is part of the chord the macro holds — "
+                    "pick a different one")
+        return ""
+
     def _watch_skin_key(self) -> None:
         """
-        Drive the strip sweep from Shift + the chosen key.
+        Drive the strip sweep from the activation key.
 
-        Both have to be down, and the sweep stops the moment either comes up —
-        the chord is what ARK is acting on, so the cursor must not keep moving
-        once it is broken.
+        That key is the app's, not the game's: it starts and stops the macro,
+        and the macro is what holds Shift + the hotbar slot afterwards.
         """
         skin = self.cfg.skin_overcap
         if not (skin.enabled and sweep.usable(skin.area)):
             return
         if self._sweep_kind == "drop":
             return
-        vk = w.vk_from_name(skin.key)
-        if vk is None:
-            self._log(f'skin overcap: "{skin.key}" is not a key name', "err")
+        problem = self._skin_problem()
+        if problem:
+            self._log(f"skin overcap off: {problem}", "err")
             self.sw_skin.switch.setChecked(False)
             return
-        if not self._chord_down(vk):
+        vk = w.vk_from_name(skin.activate_key)
+        down = w.key_is_down(vk)
+        pressed = down and not self._skin_was_down
+        self._skin_was_down = down
+
+        if skin.mode == "toggle":
+            if not pressed:
+                return
+            if self._sweep_timer.isActive():
+                self._stop_sweep()
+            elif self._can_sweep():
+                self._start_skin_sweep()
+            return
+
+        if not down:
             self._stop_sweep()
             return
         if self._sweep_timer.isActive():
             return
         if self._can_sweep():
             self._start_skin_sweep()
-
-    def _chord_down(self, vk: int) -> bool:
-        shift = w.vk_from_name("shift")
-        return bool(shift is not None and w.key_is_down(shift)
-                    and w.key_is_down(vk))
 
     def _start_drop_sweep(self) -> None:
         hold = self.cfg.hold_drop
@@ -1477,10 +1528,34 @@ class MainWindow(QWidget):
         if not path:
             return
         self._sweep_kind = "skin"
+        self._hold_chord(True)
+        stop = ("release the key" if skin.mode == "hold" else "press again")
         self._begin_sweep(
             path, skin.dwell_ms,
-            f"skin overcap: running the strip, {len(path)} stops a lap, while "
-            f"Shift+{skin.key.upper()} is held")
+            f"skin overcap: holding Shift+{skin.key.upper()} and running "
+            f"{len(path)} stops a lap — {stop} to stop")
+
+    def _hold_chord(self, down: bool) -> None:
+        """
+        Press or release Shift + the hotbar slot the macro holds for you.
+
+        Releasing has to be unconditional and safe to repeat: a Shift left down
+        because a sweep ended some way nobody planned for would follow you out of
+        the game and into everything else you type.
+        """
+        shift = w.vk_from_name("shift")
+        vk = w.vk_from_name(self.cfg.skin_overcap.key)
+        if shift is None or vk is None:
+            return
+        if down:
+            w.key_down(shift)
+            w.key_down(vk)
+            self._chord_held = True
+            return
+        if self._chord_held:
+            w.key_up(vk)
+            w.key_up(shift)
+            self._chord_held = False
 
     def _begin_sweep(self, path: list[tuple[int, int]], dwell: int,
                      message: str) -> None:
@@ -1539,14 +1614,16 @@ class MainWindow(QWidget):
         """
         One stop per tick along the strip, back and forth.
 
-        Nothing is sent: the chord is under the player's fingers. The sweep only
-        has to stop the moment that chord breaks, or the cursor would keep
-        running the strip with nothing acting on it.
+        The chord is already down — the macro pressed it when the sweep started
+        and holds it until the sweep ends, which is what a finger on Shift and
+        the slot would do.
         """
-        vk = w.vk_from_name(self.cfg.skin_overcap.key)
-        if vk is None or not self._chord_down(vk):
-            self._stop_sweep()
-            return
+        skin = self.cfg.skin_overcap
+        if skin.mode == "hold":
+            vk = w.vk_from_name(skin.activate_key)
+            if vk is None or not w.key_is_down(vk):
+                self._stop_sweep()
+                return
         if not w.is_foreground(self._sweep_hwnd):
             self._stop_sweep()
             return
@@ -1558,6 +1635,9 @@ class MainWindow(QWidget):
         self._sweep_index += 1
 
     def _stop_sweep(self) -> None:
+        # released first and unconditionally: every path out of a sweep comes
+        # through here, and a Shift left down would follow the user everywhere
+        self._hold_chord(False)
         if not self._sweep_timer.isActive():
             self._sweep_kind = ""
             return
@@ -2170,6 +2250,7 @@ class MainWindow(QWidget):
         self._afk_timer.stop()
         self._auto_timer.stop()
         self._hold_watch.stop()
+        # also releases the chord if a sweep was holding it
         self._stop_sweep()
         # the macro stopping here must not kick off a pull on the way out
         self._update_pending = False

@@ -344,14 +344,39 @@ rescaled if your screen resolution changes — verify it after, same as the poin
 
 ## Skin overcap
 
-**Points → Skin overcap.** Hold **Shift + a hotbar key** (slot `2` by default)
-and the cursor runs the strip you selected end to end and back, in a loop, for
-as long as you hold them.
+**Points → Skin overcap.** Press your key and the macro holds **Shift + a hotbar
+slot** for you while the cursor runs the strip you selected end to end and back,
+in a loop. Your hands stay free.
 
-Same shape as hold-to-drop, and the same reason for it: **your fingers hold the
-chord, so ARK keeps receiving it, and the app only has to move the mouse.** It
-sends no keys here at all — there is nothing to send when the input is already
-coming from you.
+### Two keys, and they are not the same key
+
+This is the part worth being precise about, because conflating them makes the
+feature nonsense:
+
+| | What it is | Who presses it |
+|---|---|---|
+| **Start it with** (`f4`) | **Yours.** It only tells the app to start or stop. The game has nothing to do with it | You |
+| **Macro holds Shift +** (`2`) | **The game's.** The instruction ARK acts on | The macro |
+
+Pressing the chord to start a macro whose whole job is to hold that chord would
+be a circle, so the app refuses it: set the activation key to `2` or to `shift`
+and the card says so and will not run.
+
+Pick an activation key **ARK has nothing bound to** — it is watched, not
+swallowed, so it reaches the game as well as the app.
+
+### The chord always comes back up
+
+The macro presses Shift and the slot down when the sweep starts and releases them
+when it ends — by **every** route out: the second press, the key released in hold
+mode, ARK losing focus, the switch turned off, the app closing. A Shift left down
+would not stay in the game; it would follow you into everything else you type.
+
+### How it runs
+
+**Press to start and stop** by default, which is the point of a separate
+activation key: press once, put your hand back on the mouse, press again when
+you are done. **Hold the key** is there too if you prefer it.
 
 The strip is picked the same way, on a frozen screen, with the path drawn as you
 drag. It is one row, so only the **middle** of the box is swept: the height only
@@ -364,12 +389,15 @@ matter beyond that.
   because both turning points are only visited once.
 - **Time per stop** (40 ms) is the same knob as hold-to-drop's, with the same
   advice: lower it on an installed game, raise it on GeForce NOW.
-- It stops the instant **either** part of the chord comes up, or ARK stops being
-  the front window.
+- It stops the moment ARK stops being the front window, whichever mode it is in.
 
 **Hold-to-drop and skin overcap never run at the same time.** There is one
-cursor, so whichever chord or key is already sweeping keeps it until it is
-released.
+cursor, so whichever one is already sweeping keeps it until it stops.
+
+Hold-to-drop does not have a separate activation key, and does not need one: the
+key you hold there **is** the game's instruction, so your finger is doing both
+jobs at once. Skin overcap is the opposite — the instruction is a chord you
+should not have to hold, which is exactly why the two keys are split.
 
 ## Auto-feed
 
