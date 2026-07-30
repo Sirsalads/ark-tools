@@ -120,6 +120,23 @@ class HoldDrop:
 
 
 @dataclass
+class SkinOvercap:
+    """
+    Runs the cursor back and forth along a strip while Shift + a key is held.
+
+    Same shape as hold-to-drop and the same reason for it: your fingers hold the
+    chord, so ARK keeps receiving it, and the app only has to move the mouse.
+    """
+
+    enabled: bool = False
+    key: str = "2"                  # held together with Shift
+    area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # x,y,w,h
+    area_resolution: list[int] = field(default_factory=lambda: [0, 0])
+    stops: int = 10                 # points across the strip, one per hotbar slot
+    dwell_ms: int = 40
+
+
+@dataclass
 class AutoFeed:
     """
     Eats and drinks from the hotbar on a timer, while farming.
@@ -159,6 +176,7 @@ class Config:
     anti_afk: AntiAfk = field(default_factory=AntiAfk)
     auto_feed: AutoFeed = field(default_factory=AutoFeed)
     hold_drop: HoldDrop = field(default_factory=HoldDrop)
+    skin_overcap: SkinOvercap = field(default_factory=SkinOvercap)
     app: App = field(default_factory=App)
 
     # -------------------------------------------------------------- io
@@ -308,6 +326,14 @@ def _sanitize(cfg: "Config") -> None:
     # no keys of its own
     hold.mode = ("toggle" if str(hold.mode).strip().lower() == "toggle"
                  else "hold")
+
+    skin = cfg.skin_overcap
+    skin.area = _rect(skin.area)
+    skin.area_resolution = _point(skin.area_resolution)
+    # two stops is a strip with only its ends; below that there is no sweep
+    skin.stops = _count(skin.stops, 10, 2, 40)
+    skin.dwell_ms = _count(skin.dwell_ms, 40, 5, 1000)
+    skin.key = str(skin.key).strip().lower()
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

@@ -208,12 +208,18 @@ class AreaPicker(QWidget):
     cancelled = Signal()
 
     def __init__(self, shot: QPixmap, area: QRect, columns: int, rows: int,
-                 origin: tuple[int, int] = (0, 0)) -> None:
+                 origin: tuple[int, int] = (0, 0), label: str = "",
+                 title: str = "", strip: bool = False) -> None:
         super().__init__(None)
         self._shot = shot
         self._columns = max(int(columns), 1)
         self._rows = max(int(rows), 1)
         self._origin = origin
+        self._label = label or f"HOLD-TO-DROP AREA · {self._columns} X "\
+                               f"{self._rows}"
+        self._title = title or "Drag a box over the slots to empty"
+        # a strip is swept end to end and back, not covered row by row
+        self._strip = strip
         self._anchor: QPoint | None = None
         self._cursor = QPoint(area.width() // 2, area.height() // 2)
 
@@ -316,8 +322,9 @@ class AreaPicker(QWidget):
 
     def _paint_grid(self, painter: QPainter, box: QRect) -> None:
         """The sweep path itself: the dots it visits, in the order it visits."""
-        path = sweep.serpentine([box.x(), box.y(), box.width(), box.height()],
-                                self._columns, self._rows)
+        area = [box.x(), box.y(), box.width(), box.height()]
+        path = (sweep.pingpong(area, self._columns) if self._strip
+                else sweep.serpentine(area, self._columns, self._rows))
         if not path:
             return
         painter.setPen(QPen(QColor(T.ACCENT), 1, Qt.DashLine))
@@ -350,16 +357,16 @@ class AreaPicker(QWidget):
         painter.setPen(QColor(T.ACCENT))
         painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
         painter.drawText(banner.adjusted(22, 12, -22, 0), Qt.AlignLeft,
-                         f"HOLD-TO-DROP AREA · {self._columns} X {self._rows}")
+                         self._label)
 
         painter.setPen(QColor(T.TEXT))
         painter.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
         painter.drawText(banner.adjusted(22, 28, -22, 0), Qt.AlignLeft,
-                         "Drag a box over the slots to empty")
+                         self._title)
 
         if box.isEmpty():
-            detail = ("Every dot is one slot the cursor will stop on. Drag from "
-                      "one corner of the block to the other. Esc cancels.")
+            detail = ("Every dot is one stop the cursor will make. Drag from "
+                      "one corner to the other. Esc cancels.")
         else:
             detail = (f"{box.width()} x {box.height()} px — check the dots land "
                       "on the slot centres, then release to confirm")

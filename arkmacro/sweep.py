@@ -49,6 +49,24 @@ def serpentine(area: list[int], columns: int, rows: int) -> list[tuple[int, int]
     return path
 
 
+def pingpong(area: list[int], stops: int) -> list[tuple[int, int]]:
+    """
+    Left to right and back again, along the middle of `area`.
+
+    For a single strip like the hotbar, where there is one row and the cursor
+    has to keep passing over it rather than cover a block. The return leg skips
+    both ends: they are the turning points and are already visited, and stopping
+    on the same spot twice in a row only wastes a tick.
+    """
+    x, y, width, height = (int(value) for value in area)
+    stops = max(int(stops), 2)
+    if width < MIN_SIDE or height < MIN_SIDE:
+        return []
+    middle = round(y + height / 2)
+    forward = [(centre, middle) for centre in _centres(x, width, stops)]
+    return forward + list(reversed(forward[1:-1]))
+
+
 def normalise(x1: int, y1: int, x2: int, y2: int) -> list[int]:
     """Two dragged corners -> [x, y, width, height], whichever way it was drawn."""
     left, right = sorted((int(x1), int(x2)))

@@ -541,6 +541,23 @@ grown = ark_sweep.rescale([100, 200, 240, 200], [1920, 1080], [2560, 1440])
 assert grown[2:] == [320, 267], grown
 print(f"OK  the sweep visits all {len(path)} slots, in a serpentine")
 
+# ------------------------------------------- 7c) skin overcap ping-pong
+# One row, run end to end and back, so the cursor keeps passing over the strip.
+strip = ark_sweep.pingpong([100, 900, 600, 80], 10)
+# ten stops out, and the return leg skips both ends: they are the turning
+# points, and stopping twice on the same spot only wastes a tick
+assert len(strip) == 18, f"{len(strip)} stops in a lap of 10"
+assert all(y == 940 for _x, y in strip), "the strip is not swept down its middle"
+xs = [x for x, _y in strip]
+assert xs[:10] == sorted(xs[:10]), "the outward leg is not left to right"
+assert xs[10:] == sorted(xs[10:], reverse=True), "the return leg does not return"
+assert xs[9] == max(xs) and xs[0] == min(xs), (xs[0], xs[9])
+# looping it is continuous: the step from the last stop back to the first is
+# the same as any other
+assert xs[-1] - xs[0] == xs[1] - xs[0], "the loop back to the start jumps"
+assert ark_sweep.pingpong([0, 0, 10, 10], 10) == []
+print(f"OK  the strip sweep runs {len(strip)} stops out and back, and loops")
+
 # ------------------------------------------------- 8) config migration
 legacy = pathlib.Path(tempfile.gettempdir()) / "ark_macro_legacy.json"
 legacy.write_text(json.dumps({

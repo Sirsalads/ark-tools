@@ -342,6 +342,35 @@ would drop those too.
 The cursor goes back where it was when you release the key, and the area is
 rescaled if your screen resolution changes — verify it after, same as the points.
 
+## Skin overcap
+
+**Points → Skin overcap.** Hold **Shift + a hotbar key** (slot `2` by default)
+and the cursor runs the strip you selected end to end and back, in a loop, for
+as long as you hold them.
+
+Same shape as hold-to-drop, and the same reason for it: **your fingers hold the
+chord, so ARK keeps receiving it, and the app only has to move the mouse.** It
+sends no keys here at all — there is nothing to send when the input is already
+coming from you.
+
+The strip is picked the same way, on a frozen screen, with the path drawn as you
+drag. It is one row, so only the **middle** of the box is swept: the height only
+has to cover the slots, and where you put the top and bottom edges does not
+matter beyond that.
+
+- **Stops across** (10) is how many places the cursor pauses between the ends —
+  one per hotbar slot is the usual answer. A lap is *stops out plus the way
+  back*, which the status line spells out: 10 stops each way is 18 a lap,
+  because both turning points are only visited once.
+- **Time per stop** (40 ms) is the same knob as hold-to-drop's, with the same
+  advice: lower it on an installed game, raise it on GeForce NOW.
+- It stops the instant **either** part of the chord comes up, or ARK stops being
+  the front window.
+
+**Hold-to-drop and skin overcap never run at the same time.** There is one
+cursor, so whichever chord or key is already sweeping keeps it until it is
+released.
+
 ## Auto-feed
 
 **Settings → Auto-feed.** Presses two hotbar slots on a timer so the character

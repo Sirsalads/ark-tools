@@ -709,7 +709,70 @@ assert not win._hold_watch.isActive(), "disabling did not stop the watcher"
 held["down"] = False
 print("OK  hold-to-drop refuses while farming, unfocused, picking or misbound")
 
-# ------------------------- 22d) the area picker previews the real path
+# ------------------------------------------------- 23) skin overcap
+# Shift plus a hotbar key runs the cursor along a strip. Same machinery as
+# hold-to-drop, a different path and a chord instead of one key.
+moves.clear()
+taps.clear()
+chord = {"shift": False, "key": False}
+w_module.key_is_down = lambda vk: (chord["shift"] if vk == 0x10
+                                   else chord["key"])
+win.cfg.skin_overcap.area = [100, 900, 600, 80]
+win.cfg.skin_overcap.area_resolution = list(w_module.screen_size())
+win.sw_skin.switch.setChecked(True)
+win.cb_skin_key.setCurrentText("2")
+win.sp_skin_stops.setValue(10)
+win.sp_skin_dwell.setValue(5)
+win._pull()
+assert win._hold_watch.isActive(), "a ready strip did not arm the watcher"
+assert "18 a full lap" in win.lbl_skin_area.text(), win.lbl_skin_area.text()
+
+# the key alone is not the chord, and neither is Shift alone
+chord["key"] = True
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "ran on the key without Shift"
+chord["key"], chord["shift"] = False, True
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "ran on Shift alone"
+assert moves == [], f"moved the mouse without the chord: {moves}"
+
+# both down: it runs the strip, out and back, and sends no keys of its own
+chord["key"] = True
+win._watch_skin_key()
+assert win._sweep_timer.isActive(), "the chord did not start the strip"
+for _ in range(17):
+    win._sweep_step()
+assert len(moves) == 18, f"{len(moves)} moves for a full lap"
+assert all(y == 940 for _x, y in moves), "it left the middle of the strip"
+assert moves[9][0] == max(x for x, _y in moves), "it never reached the far end"
+assert moves[-1][0] < moves[9][0], "it did not come back"
+assert taps == [], f"skin overcap pressed keys of its own: {taps}"
+
+# breaking the chord stops it within one stop, and the cursor goes back
+chord["shift"] = False
+win._sweep_step()
+assert not win._sweep_timer.isActive(), "kept running with Shift released"
+assert moves[-1] == (7, 9), f"the cursor was left on the strip: {moves[-1]}"
+print("OK  skin overcap runs the strip on the chord, and sends nothing")
+
+# ------------------------- 23b) the two sweeps never share the cursor
+chord["shift"], chord["key"] = True, True
+win._watch_skin_key()
+assert win._sweep_kind == "skin"
+# hold-to-drop is armed too, and its key reads as down through the same fake —
+# it must not take the cursor from a strip that is already running
+win._watch_hold_key()
+assert win._sweep_kind == "skin", "hold-to-drop hijacked a running strip"
+win._stop_sweep()
+assert win._sweep_kind == "", "the kind outlived the sweep"
+
+win.sw_skin.switch.setChecked(False)
+win._pull()
+chord["shift"] = chord["key"] = False
+w_module.key_is_down = lambda _vk: held["down"]
+print("OK  hold-to-drop and skin overcap never run at the same time")
+
+# ------------------------------------------------- 24) the area picker
 from arkmacro.ui.picker import AreaPicker  # noqa: E402
 
 area_picker = AreaPicker(shot, QRect(0, 0, 800, 600), 4, 4, (1920, 0))

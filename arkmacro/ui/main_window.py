@@ -183,13 +183,17 @@ class MainWindow(QWidget):
         # the window never freezes while it runs.
         self._hold_watch = QTimer(self)
         self._hold_watch.setInterval(60)
-        self._hold_watch.timeout.connect(self._watch_hold_key)
+        self._hold_watch.timeout.connect(self._watch_keys)
+        # which feature owns the running sweep: they share one cursor, so only
+        # one of them can be moving it
+        self._sweep_kind = ""
         self._sweep_timer = QTimer(self)
         self._sweep_timer.timeout.connect(self._sweep_step)
         self._sweep_path: list[tuple[int, int]] = []
         self._sweep_index = 0
         self._sweep_return: tuple[int, int] | None = None
         self._sweep_hwnd: int | None = None
+        self._pick_area_kind = "drop"
         self._hold_refused = False
         # toggling acts on the press, so the level has to be remembered between
         # ticks to tell a new press from a key that is simply still down
@@ -604,9 +608,57 @@ class MainWindow(QWidget):
         lay.addWidget(fallback)
 
         lay.addWidget(self._hold_drop_card())
+        lay.addWidget(self._skin_overcap_card())
         self._sync_hold_mode_note()
         lay.addStretch(1)
         return page
+
+    # ------------------------------------------------------- skin overcap
+    def _skin_overcap_card(self) -> Card:
+        skin = self.cfg.skin_overcap
+        card = Card(
+            "Skin overcap",
+            "Hold Shift and a hotbar key, and the cursor runs the strip below "
+            "end to end and back, in a loop, for as long as you hold them.")
+        self.sw_skin = SwitchRow("Run the strip with Shift + a key",
+                                 skin.enabled)
+        card.add(self.sw_skin)
+
+        sgrid = FormGrid(pairs=2)
+        self.cb_skin_key = combo(HOTBAR, HOTBAR.index(skin.key)
+                                 if skin.key in HOTBAR else 1, width=124)
+        sgrid.add("Shift +", self.cb_skin_key,
+                  "The hotbar slot you hold together with Shift")
+        self.sp_skin_dwell = spin(5, 1000, skin.dwell_ms, " ms", 5)
+        sgrid.add("Time per stop", self.sp_skin_dwell)
+        self.sp_skin_stops = spin(2, 40, skin.stops, "", 1)
+        sgrid.add("Stops across", self.sp_skin_stops,
+                  "How many places the cursor pauses between the two ends. One "
+                  "per hotbar slot is the usual answer")
+        sgrid.skip()
+        card.add(sgrid)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_skin_area = QPushButton("  Freeze screen and select the strip")
+        self.btn_skin_area.setObjectName("primary")
+        self.btn_skin_area.setCursor(Qt.PointingHandCursor)
+        self.btn_skin_area.setIcon(icons.icon("search", "#04222B", 16))
+        self.btn_skin_area.setIconSize(QSize(16, 16))
+        self.btn_skin_area.clicked.connect(self._begin_skin_pick)
+        row.addWidget(self.btn_skin_area, 1)
+        card.add(row)
+
+        self.lbl_skin_area = hint_label("")
+        card.add(self.lbl_skin_area)
+        card.add(hint_label(
+            "Drag the box over your hotbar. Only the middle of the box is "
+            "swept — it is one row, so the height only has to cover the slots. "
+            "The app sends no keys here at all: your fingers hold the chord, "
+            "and it moves the mouse. Same guards as hold-to-drop — ARK in "
+            "front, macro stopped — and the two never run at once, because "
+            "there is one cursor."))
+        return card
 
     # ------------------------------------------------------- hold to drop
     def _hold_drop_card(self) -> Card:
@@ -1078,6 +1130,8 @@ class MainWindow(QWidget):
             self.sp_feed_gap, self.cb_food, self.cb_water,
             self.sw_hold.switch, self.ed_hold_key, self.sp_hold_cols,
             self.sp_hold_rows, self.sp_hold_dwell, self.cb_hold_mode,
+            self.sw_skin.switch, self.cb_skin_key, self.sp_skin_stops,
+            self.sp_skin_dwell,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -1144,6 +1198,12 @@ class MainWindow(QWidget):
         hold.columns = self.sp_hold_cols.value()
         hold.rows = self.sp_hold_rows.value()
         hold.dwell_ms = self.sp_hold_dwell.value()
+
+        skin = self.cfg.skin_overcap
+        skin.enabled = self.sw_skin.switch.isChecked()
+        skin.key = self.cb_skin_key.currentText()
+        skin.stops = self.sp_skin_stops.value()
+        skin.dwell_ms = self.sp_skin_dwell.value()
         self._sync_hold_drop()
 
         feed = self.cfg.auto_feed
@@ -1253,8 +1313,10 @@ class MainWindow(QWidget):
     # ---------------------------------------------------------- hold to drop
     def _sync_hold_drop(self) -> None:
         hold = self.cfg.hold_drop
-        ready = hold.enabled and sweep.usable(hold.area)
-        if ready:
+        skin = self.cfg.skin_overcap
+        drop_ready = hold.enabled and sweep.usable(hold.area)
+        skin_ready = skin.enabled and sweep.usable(skin.area)
+        if drop_ready or skin_ready:
             vk = w.vk_from_name(hold.key)
             # a key that is already down as this arms is not a fresh press, or
             # switching the mode on with a finger on the key would start a sweep
@@ -1263,7 +1325,17 @@ class MainWindow(QWidget):
         else:
             self._hold_watch.stop()
             self._stop_sweep()
+        if not drop_ready and self._sweep_kind == "drop":
+            self._stop_sweep()
+        if not skin_ready and self._sweep_kind == "skin":
+            self._stop_sweep()
         self._refresh_hold_status()
+        self._refresh_skin_status()
+
+    def _watch_keys(self) -> None:
+        """One poll for both key-driven sweeps. They share the cursor."""
+        self._watch_hold_key()
+        self._watch_skin_key()
 
     def _refresh_hold_status(self) -> None:
         hold = self.cfg.hold_drop
@@ -1284,6 +1356,23 @@ class MainWindow(QWidget):
             f"{width}x{height} px at ({x}, {y}){where} — {hold.columns}x"
             f"{hold.rows} = {slots} slots, about {pace:.1f}s per lap, and "
             f"{driven}.")
+
+    def _refresh_skin_status(self) -> None:
+        skin = self.cfg.skin_overcap
+        if not sweep.usable(skin.area):
+            self.lbl_skin_area.setText(
+                "No strip selected yet — skin overcap will not do anything "
+                "until you pick one on a frozen screen.")
+            return
+        x, y, width, height = skin.area
+        path = len(sweep.pingpong(skin.area, skin.stops))
+        pace = path * skin.dwell_ms / 1000.0
+        res = skin.area_resolution
+        where = f", captured at {res[0]}x{res[1]}" if res and all(res) else ""
+        self.lbl_skin_area.setText(
+            f"{width}x{height} px at ({x}, {y}){where} — {skin.stops} stops "
+            f"each way, {path} a full lap, about {pace:.1f}s. It runs while "
+            f"Shift+«{skin.key.upper()}» is held.")
 
     def _can_sweep(self) -> bool:
         """Whether it is safe to start a sweep right now, and say why not once."""
@@ -1307,10 +1396,16 @@ class MainWindow(QWidget):
         acted on once and the release means nothing.
         """
         hold = self.cfg.hold_drop
+        if not (hold.enabled and sweep.usable(hold.area)):
+            return
+        if self._sweep_kind == "skin":
+            return
         vk = w.vk_from_name(hold.key)
         if vk is None:
             self._log(f'hold-to-drop: "{hold.key}" is not a key name', "err")
-            self._hold_watch.stop()
+            # switch the feature off rather than stop the timer: the watcher is
+            # shared, and skin overcap may still be using it
+            self.sw_hold.switch.setChecked(False)
             return
         down = w.key_is_down(vk)
         pressed = down and not self._hold_was_down
@@ -1322,7 +1417,7 @@ class MainWindow(QWidget):
             if self._sweep_timer.isActive():
                 self._stop_sweep()
             elif self._can_sweep():
-                self._start_sweep()
+                self._start_drop_sweep()
             return
 
         if not down:
@@ -1332,38 +1427,93 @@ class MainWindow(QWidget):
         if self._sweep_timer.isActive():
             return
         if self._can_sweep():
-            self._start_sweep()
+            self._start_drop_sweep()
 
-    def _start_sweep(self) -> None:
+    def _watch_skin_key(self) -> None:
+        """
+        Drive the strip sweep from Shift + the chosen key.
+
+        Both have to be down, and the sweep stops the moment either comes up —
+        the chord is what ARK is acting on, so the cursor must not keep moving
+        once it is broken.
+        """
+        skin = self.cfg.skin_overcap
+        if not (skin.enabled and sweep.usable(skin.area)):
+            return
+        if self._sweep_kind == "drop":
+            return
+        vk = w.vk_from_name(skin.key)
+        if vk is None:
+            self._log(f'skin overcap: "{skin.key}" is not a key name', "err")
+            self.sw_skin.switch.setChecked(False)
+            return
+        if not self._chord_down(vk):
+            self._stop_sweep()
+            return
+        if self._sweep_timer.isActive():
+            return
+        if self._can_sweep():
+            self._start_skin_sweep()
+
+    def _chord_down(self, vk: int) -> bool:
+        shift = w.vk_from_name("shift")
+        return bool(shift is not None and w.key_is_down(shift)
+                    and w.key_is_down(vk))
+
+    def _start_drop_sweep(self) -> None:
         hold = self.cfg.hold_drop
         path = sweep.serpentine(hold.area, hold.columns, hold.rows)
         if not path:
             return
+        self._sweep_kind = "drop"
+        how = ("press again to stop" if hold.mode == "toggle"
+               else "while the key is held")
+        self._begin_sweep(path, hold.dwell_ms,
+                          f"hold-to-drop: sweeping {len(path)} slots, {how}")
+
+    def _start_skin_sweep(self) -> None:
+        skin = self.cfg.skin_overcap
+        path = sweep.pingpong(skin.area, skin.stops)
+        if not path:
+            return
+        self._sweep_kind = "skin"
+        self._begin_sweep(
+            path, skin.dwell_ms,
+            f"skin overcap: running the strip, {len(path)} stops a lap, while "
+            f"Shift+{skin.key.upper()} is held")
+
+    def _begin_sweep(self, path: list[tuple[int, int]], dwell: int,
+                     message: str) -> None:
         self._sweep_path = path
         self._sweep_return = w.get_cursor_pos()
         # remembered rather than looked up every tick: find_window walks every
         # window on the desktop, and this runs 25 times a second
         self._sweep_hwnd = w.find_window(self.cfg.target.window_title)
-        # step onto the first slot here, so it gets a full dwell before the tick
+        # step onto the first stop here, so it gets a full dwell before the tick
         # that presses the key on it
         w.move_cursor(*path[0])
         self._sweep_index = 1
-        self._sweep_timer.start(hold.dwell_ms)
-        how = ("press again to stop" if hold.mode == "toggle"
-               else "while the key is held")
-        self._log(f"hold-to-drop: sweeping {len(path)} slots, {how}", "info")
+        self._sweep_timer.start(max(int(dwell), 5))
+        self._log(message, "info")
 
     def _sweep_step(self) -> None:
         """
-        One slot per tick, looping, until it is told to stop.
+        One stop per tick, looping, until it is told to stop.
 
-        The key is pressed here only when toggling. While the key is *held*
-        there is nothing to send — the player's own finger is already telling
-        ARK to drop, and a press on top of that would be a second drop.
+        The key is pressed here only when hold-to-drop is toggling. Whenever a
+        key is *held* — either feature — there is nothing to send: the player's
+        own fingers are already telling ARK what to do, and a press on top of
+        that would be a second one.
         """
+        if not self._sweep_path:
+            self._stop_sweep()
+            return
+        if self._sweep_kind == "skin":
+            return self._skin_step()
+
         hold = self.cfg.hold_drop
         vk = w.vk_from_name(hold.key)
-        if vk is None or not self._sweep_path:
+        if vk is None:
             self._stop_sweep()
             return
         # re-checked here and not only on the watch timer: this runs far more
@@ -1383,21 +1533,44 @@ class MainWindow(QWidget):
             # the window and let the timers pile up behind each other — which is
             # exactly what happens when someone lowers the dwell chasing speed.
             w.tap(vk, hold=min(0.025, hold.dwell_ms / 3000.0))
+        self._advance()
+
+    def _skin_step(self) -> None:
+        """
+        One stop per tick along the strip, back and forth.
+
+        Nothing is sent: the chord is under the player's fingers. The sweep only
+        has to stop the moment that chord breaks, or the cursor would keep
+        running the strip with nothing acting on it.
+        """
+        vk = w.vk_from_name(self.cfg.skin_overcap.key)
+        if vk is None or not self._chord_down(vk):
+            self._stop_sweep()
+            return
+        if not w.is_foreground(self._sweep_hwnd):
+            self._stop_sweep()
+            return
+        self._advance()
+
+    def _advance(self) -> None:
         x, y = self._sweep_path[self._sweep_index % len(self._sweep_path)]
         w.move_cursor(x, y)
         self._sweep_index += 1
 
     def _stop_sweep(self) -> None:
         if not self._sweep_timer.isActive():
+            self._sweep_kind = ""
             return
         self._sweep_timer.stop()
         laps = self._sweep_index / max(len(self._sweep_path), 1)
+        name = "skin overcap" if self._sweep_kind == "skin" else "hold-to-drop"
+        self._sweep_kind = ""
         # put the pointer back where it was, so releasing the key does not leave
         # the cursor parked on some slot in the middle of the panel
         if self._sweep_return:
             w.move_cursor(*self._sweep_return)
             self._sweep_return = None
-        self._log(f"hold-to-drop: stopped after {self._sweep_index} slots "
+        self._log(f"{name}: stopped after {self._sweep_index} stops "
                   f"({laps:.1f} laps)", "ok")
 
     # ------------------------------------------------------------ auto feeding
@@ -1549,23 +1722,26 @@ class MainWindow(QWidget):
 
     def _maybe_rescale_area(self) -> None:
         """
-        Convert the hold-to-drop area if the screen changed since it was picked.
+        Convert the picked areas if the screen changed since they were picked.
 
-        The area is in screen pixels, not game pixels: it is dragged over a
-        screenshot of the whole desktop, so the screen is what it scales with.
+        These are in screen pixels, not game pixels: they are dragged over a
+        screenshot of the whole desktop, so the screen is what they scale with.
         """
-        hold = self.cfg.hold_drop
-        old = hold.area_resolution
-        if not (old and all(old)) or not sweep.usable(hold.area):
-            return
         width, height = w.screen_size()
-        if [width, height] == list(old):
-            return
-        hold.area = sweep.rescale(hold.area, old, [width, height])
-        hold.area_resolution = [width, height]
+        for target, name in ((self.cfg.hold_drop, "hold-to-drop area"),
+                             (self.cfg.skin_overcap, "skin overcap strip")):
+            old = target.area_resolution
+            if not (old and all(old)) or not sweep.usable(target.area):
+                continue
+            if [width, height] == list(old):
+                continue
+            target.area = sweep.rescale(target.area, old, [width, height])
+            target.area_resolution = [width, height]
+            self._log(f"screen changed from {old[0]}x{old[1]} to "
+                      f"{width}x{height} — {name} rescaled, check it before "
+                      "using it", "warn")
         self._refresh_hold_status()
-        self._log(f"screen changed from {old[0]}x{old[1]} to {width}x{height} — "
-                  "hold-to-drop area rescaled, check it before using it", "warn")
+        self._refresh_skin_status()
 
     def _test_point(self, x: int, y: int) -> None:
         if not (x or y):
@@ -1589,16 +1765,21 @@ class MainWindow(QWidget):
         QApplication.processEvents()
         QTimer.singleShot(350, self._grab_and_pick)
 
-    def _begin_area_pick(self) -> None:
+    def _begin_skin_pick(self) -> None:
+        self._begin_area_pick(kind="skin")
+
+    def _begin_area_pick(self, _checked: bool = False,
+                         kind: str = "drop") -> None:
         if self._picking:
             return
+        self._pick_area_kind = kind
         if self.engine is not None and self.engine.isRunning():
             self._stop_macro()
             self._log("macro stopped so it does not click into the picker",
                       "warn")
         self._stop_sweep()
         self._picking = True
-        self._log("freezing the screen — open the container you want to empty",
+        self._log("freezing the screen — bring up what you want to select over",
                   "warn")
         self.hide()
         QApplication.processEvents()
@@ -1618,8 +1799,15 @@ class MainWindow(QWidget):
         self._shot = shot
         self._shot_origin = (round(geo.x() * ratio), round(geo.y() * ratio))
         self._pick_screen = screen
-        picker = AreaPicker(shot, geo, self.sp_hold_cols.value(),
-                            self.sp_hold_rows.value(), self._shot_origin)
+        if self._pick_area_kind == "skin":
+            stops = self.sp_skin_stops.value()
+            picker = AreaPicker(shot, geo, stops, 1, self._shot_origin,
+                                label=f"SKIN OVERCAP STRIP · {stops} STOPS",
+                                title="Drag a box over your hotbar",
+                                strip=True)
+        else:
+            picker = AreaPicker(shot, geo, self.sp_hold_cols.value(),
+                                self.sp_hold_rows.value(), self._shot_origin)
         picker.picked.connect(self._on_area_picked)
         picker.cancelled.connect(self._cancel_pick)
         self._drop_picker()
@@ -1627,14 +1815,16 @@ class MainWindow(QWidget):
         picker.show()
 
     def _on_area_picked(self, x: int, y: int, width: int, height: int) -> None:
-        self.cfg.hold_drop.area = [x, y, width, height]
-        screen_w, screen_h = w.screen_size()
-        self.cfg.hold_drop.area_resolution = [screen_w, screen_h]
+        target = (self.cfg.skin_overcap if self._pick_area_kind == "skin"
+                  else self.cfg.hold_drop)
+        target.area = [x, y, width, height]
+        target.area_resolution = list(w.screen_size())
         self._drop_picker()
         self._picking = False
         self._restore_window()
-        self._log(f"hold-to-drop area set: {width}x{height} px at ({x}, {y})",
-                  "ok")
+        name = ("skin overcap strip" if self._pick_area_kind == "skin"
+                else "hold-to-drop area")
+        self._log(f"{name} set: {width}x{height} px at ({x}, {y})", "ok")
         self._pull()
         self._save()
 
