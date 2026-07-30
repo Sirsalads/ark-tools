@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 from .. import __version__
 from .. import layout as ark_layout
+from .. import sweep
 from .. import updater
 from .. import winapi as w
 from ..config import Config
@@ -24,7 +25,7 @@ from ..hotkeys import HotkeyManager
 from . import icons
 from . import theme as T
 from .backdrop import Backdrop
-from .picker import ScreenPicker
+from .picker import AreaPicker, ScreenPicker
 from .widgets import (Card, Divider, FormGrid, HotkeyEdit, NavButton, PointThumb,
                       StatTile, SwitchRow, TemplateEditor, TitleBar, hint_label)
 
@@ -176,6 +177,20 @@ class MainWindow(QWidget):
         self._afk_timer = QTimer(self)
         self._afk_timer.timeout.connect(self._afk_tick)
 
+        # hold-to-drop: one timer watches the key, the other walks the slots.
+        # Two timers rather than a loop with sleeps in it, so releasing the key
+        # stops the sweep on the next tick instead of at the end of a lap, and
+        # the window never freezes while it runs.
+        self._hold_watch = QTimer(self)
+        self._hold_watch.setInterval(60)
+        self._hold_watch.timeout.connect(self._watch_hold_key)
+        self._sweep_timer = QTimer(self)
+        self._sweep_timer.timeout.connect(self._sweep_step)
+        self._sweep_path: list[tuple[int, int]] = []
+        self._sweep_index = 0
+        self._sweep_return: tuple[int, int] | None = None
+        self._hold_refused = False
+
         # unattended updates: a check on a long timer, and a pull that waits for
         # the macro to be idle before it restarts the app
         self._auto_timer = QTimer(self)
@@ -198,6 +213,8 @@ class MainWindow(QWidget):
         self._load_thumbs()
         self._refresh_points_status()
         self._maybe_rescale_points()
+        self._maybe_rescale_area()
+        self._sync_hold_drop()
         self._refresh_version()
         self.titlebar.update_pill.clicked.connect(self._open_settings)
         self._log("ready. set the two points on the Points tab before the "
@@ -582,8 +599,60 @@ class MainWindow(QWidget):
         fallback.add(btn_suggest)
         lay.addWidget(fallback)
 
+        lay.addWidget(self._hold_drop_card())
         lay.addStretch(1)
         return page
+
+    # ------------------------------------------------------- hold to drop
+    def _hold_drop_card(self) -> Card:
+        hold = self.cfg.hold_drop
+        card = Card(
+            "Hold-to-drop",
+            "Nothing to do with the farm loop. Hold ARK's drop key over a block "
+            "of slots and the cursor sweeps them, dropping every stack it passes "
+            "— for emptying a forge or a bag by hand, fast.")
+        self.sw_hold = SwitchRow("Sweep while the drop key is held", hold.enabled)
+        card.add(self.sw_hold)
+
+        hgrid = FormGrid(pairs=2)
+        self.ed_hold_key = QLineEdit(hold.key)
+        self.ed_hold_key.setMaxLength(10)
+        self.ed_hold_key.setFixedWidth(124)
+        self.ed_hold_key.setAlignment(Qt.AlignCenter)
+        hgrid.add("Drop key", self.ed_hold_key,
+                  "Whatever ARK has bound to dropping the item under the "
+                  "cursor. Default: o")
+        self.sp_hold_dwell = spin(5, 1000, hold.dwell_ms, " ms", 5)
+        hgrid.add("Time per slot", self.sp_hold_dwell,
+                  "Too low and the game misses the hover — raise it on a "
+                  "streamed session, which pays a round trip per slot")
+        self.sp_hold_cols = spin(1, 20, hold.columns, "", 1)
+        hgrid.add("Columns", self.sp_hold_cols)
+        self.sp_hold_rows = spin(1, 20, hold.rows, "", 1)
+        hgrid.add("Rows", self.sp_hold_rows)
+        card.add(hgrid)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_hold_area = QPushButton("  Freeze screen and select the area")
+        self.btn_hold_area.setObjectName("primary")
+        self.btn_hold_area.setCursor(Qt.PointingHandCursor)
+        self.btn_hold_area.setIcon(icons.icon("search", "#04222B", 16))
+        self.btn_hold_area.setIconSize(QSize(16, 16))
+        self.btn_hold_area.clicked.connect(self._begin_area_pick)
+        row.addWidget(self.btn_hold_area, 1)
+        card.add(row)
+
+        self.lbl_hold_area = hint_label("")
+        card.add(self.lbl_hold_area)
+        card.add(hint_label(
+            "The app never presses the key — you hold it, the app moves the "
+            "mouse. It cannot press it: a key registered as a global hotkey is "
+            "swallowed before ARK sees it, and then nothing would drop. It also "
+            "sweeps only while ARK is in front, and refuses while the macro is "
+            "farming — an autoclick loose in an open inventory would move items "
+            "around instead."))
+        return card
 
     def _point_card(self, title: str, subtitle: str, point: list[int], key: str):
         card = Card(title, subtitle)
@@ -978,6 +1047,8 @@ class MainWindow(QWidget):
             self.sp_latency, self.sw_afk.switch, self.sp_afk_interval,
             self.ed_afk_key, self.sw_feed.switch, self.sp_feed_interval,
             self.sp_feed_gap, self.cb_food, self.cb_water,
+            self.sw_hold.switch, self.ed_hold_key, self.sp_hold_cols,
+            self.sp_hold_rows, self.sp_hold_dwell,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -1037,6 +1108,14 @@ class MainWindow(QWidget):
         target.start_delay_s = self.sp_delay.value()
         target.stream_latency_ms = self.sp_latency.value()
 
+        hold = self.cfg.hold_drop
+        hold.enabled = self.sw_hold.switch.isChecked()
+        hold.key = self.ed_hold_key.text().strip().lower() or "o"
+        hold.columns = self.sp_hold_cols.value()
+        hold.rows = self.sp_hold_rows.value()
+        hold.dwell_ms = self.sp_hold_dwell.value()
+        self._sync_hold_drop()
+
         feed = self.cfg.auto_feed
         feed.enabled = self.sw_feed.switch.isChecked()
         feed.interval_s = self.sp_feed_interval.value()
@@ -1079,6 +1158,8 @@ class MainWindow(QWidget):
         if self._picking:
             self._log("finish picking the points before starting", "warn")
             return
+        # the sweep moves the mouse; the autoclick is about to want it
+        self._stop_sweep()
         self._pull()
         self._save()
         drop = self.cfg.drop
@@ -1138,6 +1219,100 @@ class MainWindow(QWidget):
     def _on_state(self, state: str) -> None:
         self._state = state
         self.titlebar.status.set_state(state)
+
+    # ---------------------------------------------------------- hold to drop
+    def _sync_hold_drop(self) -> None:
+        hold = self.cfg.hold_drop
+        ready = hold.enabled and sweep.usable(hold.area)
+        if ready:
+            self._hold_watch.start()
+        else:
+            self._hold_watch.stop()
+            self._stop_sweep()
+        self._refresh_hold_status()
+
+    def _refresh_hold_status(self) -> None:
+        hold = self.cfg.hold_drop
+        if not sweep.usable(hold.area):
+            self.lbl_hold_area.setText(
+                "No area selected yet — hold-to-drop will not do anything until "
+                "you pick one on a frozen screen.")
+            return
+        x, y, width, height = hold.area
+        slots = hold.columns * hold.rows
+        pace = slots * hold.dwell_ms / 1000.0
+        res = hold.area_resolution
+        where = f", captured at {res[0]}x{res[1]}" if res and all(res) else ""
+        self.lbl_hold_area.setText(
+            f"{width}x{height} px at ({x}, {y}){where} — {hold.columns}x"
+            f"{hold.rows} = {slots} slots, about {pace:.1f}s per lap. It keeps "
+            f"looping while «{hold.key.upper()}» is held.")
+
+    def _watch_hold_key(self) -> None:
+        """Start a sweep while the drop key is down, stop it when it comes up."""
+        hold = self.cfg.hold_drop
+        vk = w.vk_from_name(hold.key)
+        if vk is None:
+            self._log(f'hold-to-drop: "{hold.key}" is not a key name', "err")
+            self._hold_watch.stop()
+            return
+        if not w.key_is_down(vk):
+            self._stop_sweep()
+            self._hold_refused = False
+            return
+        if self._sweep_timer.isActive() or self._picking:
+            return
+        # an autoclick loose in an open inventory moves items around; the sweep
+        # would be the least of the damage
+        if self.engine is not None and self.engine.isRunning():
+            if not self._hold_refused:
+                self._hold_refused = True
+                self._log("hold-to-drop ignored while the macro is farming — "
+                          "stop it first", "warn")
+            return
+        if not w.is_foreground(w.find_window(self.cfg.target.window_title)):
+            return
+        self._start_sweep()
+
+    def _start_sweep(self) -> None:
+        hold = self.cfg.hold_drop
+        path = sweep.serpentine(hold.area, hold.columns, hold.rows)
+        if not path:
+            return
+        self._sweep_path = path
+        self._sweep_index = 0
+        self._sweep_return = w.get_cursor_pos()
+        self._sweep_timer.start(hold.dwell_ms)
+        self._log(f"hold-to-drop: sweeping {len(path)} slots", "info")
+
+    def _sweep_step(self) -> None:
+        """One slot per tick, looping, until the key comes up."""
+        hold = self.cfg.hold_drop
+        vk = w.vk_from_name(hold.key)
+        # re-checked here and not only on the watch timer: this runs far more
+        # often, so the sweep stops within one slot of the key being released
+        if vk is None or not w.key_is_down(vk):
+            self._stop_sweep()
+            return
+        if not self._sweep_path:
+            self._stop_sweep()
+            return
+        x, y = self._sweep_path[self._sweep_index % len(self._sweep_path)]
+        w.move_cursor(x, y)
+        self._sweep_index += 1
+
+    def _stop_sweep(self) -> None:
+        if not self._sweep_timer.isActive():
+            return
+        self._sweep_timer.stop()
+        laps = self._sweep_index / max(len(self._sweep_path), 1)
+        # put the pointer back where it was, so releasing the key does not leave
+        # the cursor parked on some slot in the middle of the panel
+        if self._sweep_return:
+            w.move_cursor(*self._sweep_return)
+            self._sweep_return = None
+        self._log(f"hold-to-drop: stopped after {self._sweep_index} slots "
+                  f"({laps:.1f} laps)", "ok")
 
     # ------------------------------------------------------------ auto feeding
     def _sync_feed_note(self) -> None:
@@ -1286,6 +1461,26 @@ class MainWindow(QWidget):
                   f"{width}x{height} — points rescaled, verify with Test",
                   "warn")
 
+    def _maybe_rescale_area(self) -> None:
+        """
+        Convert the hold-to-drop area if the screen changed since it was picked.
+
+        The area is in screen pixels, not game pixels: it is dragged over a
+        screenshot of the whole desktop, so the screen is what it scales with.
+        """
+        hold = self.cfg.hold_drop
+        old = hold.area_resolution
+        if not (old and all(old)) or not sweep.usable(hold.area):
+            return
+        width, height = w.screen_size()
+        if [width, height] == list(old):
+            return
+        hold.area = sweep.rescale(hold.area, old, [width, height])
+        hold.area_resolution = [width, height]
+        self._refresh_hold_status()
+        self._log(f"screen changed from {old[0]}x{old[1]} to {width}x{height} — "
+                  "hold-to-drop area rescaled, check it before using it", "warn")
+
     def _test_point(self, x: int, y: int) -> None:
         if not (x or y):
             self._log("this point has not been set yet", "warn")
@@ -1307,6 +1502,55 @@ class MainWindow(QWidget):
         self.hide()
         QApplication.processEvents()
         QTimer.singleShot(350, self._grab_and_pick)
+
+    def _begin_area_pick(self) -> None:
+        if self._picking:
+            return
+        if self.engine is not None and self.engine.isRunning():
+            self._stop_macro()
+            self._log("macro stopped so it does not click into the picker",
+                      "warn")
+        self._stop_sweep()
+        self._picking = True
+        self._log("freezing the screen — open the container you want to empty",
+                  "warn")
+        self.hide()
+        QApplication.processEvents()
+        QTimer.singleShot(350, self._grab_and_pick_area)
+
+    def _grab_and_pick_area(self) -> None:
+        screen = self._pick_target_screen()
+        if screen is None:
+            self._picking = False
+            self.show()
+            self._log("no screen available to capture", "err")
+            return
+        shot = screen.grabWindow(0)
+        shot.setDevicePixelRatio(1.0)
+        geo = screen.geometry()
+        ratio = screen.devicePixelRatio()
+        self._shot = shot
+        self._shot_origin = (round(geo.x() * ratio), round(geo.y() * ratio))
+        self._pick_screen = screen
+        picker = AreaPicker(shot, geo, self.sp_hold_cols.value(),
+                            self.sp_hold_rows.value(), self._shot_origin)
+        picker.picked.connect(self._on_area_picked)
+        picker.cancelled.connect(self._cancel_pick)
+        self._drop_picker()
+        self._picker = picker
+        picker.show()
+
+    def _on_area_picked(self, x: int, y: int, width: int, height: int) -> None:
+        self.cfg.hold_drop.area = [x, y, width, height]
+        screen_w, screen_h = w.screen_size()
+        self.cfg.hold_drop.area_resolution = [screen_w, screen_h]
+        self._drop_picker()
+        self._picking = False
+        self._restore_window()
+        self._log(f"hold-to-drop area set: {width}x{height} px at ({x}, {y})",
+                  "ok")
+        self._pull()
+        self._save()
 
     def _pick_target_screen(self):
         hwnd = w.find_window(self.cfg.target.window_title)
@@ -1382,7 +1626,7 @@ class MainWindow(QWidget):
         self._drop_picker()
         self._picking = False
         self._restore_window()
-        self._log("point picking cancelled", "warn")
+        self._log("picking cancelled", "warn")
 
     def _finish_pick(self) -> None:
         self._drop_picker()
@@ -1649,6 +1893,8 @@ class MainWindow(QWidget):
     def closeEvent(self, event) -> None:
         self._afk_timer.stop()
         self._auto_timer.stop()
+        self._hold_watch.stop()
+        self._stop_sweep()
         # the macro stopping here must not kick off a pull on the way out
         self._update_pending = False
         self._stop_macro()

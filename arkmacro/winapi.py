@@ -93,6 +93,8 @@ user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
 user32.MapVirtualKeyW.restype = wintypes.UINT
 user32.VkKeyScanW.argtypes = (ctypes.c_wchar,)
 user32.VkKeyScanW.restype = ctypes.c_short
+user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
+user32.GetAsyncKeyState.restype = ctypes.c_short
 
 
 def _send(*inputs: INPUT) -> None:
@@ -131,6 +133,19 @@ for _index in range(1, 25):
 def vk_from_name(name: str) -> int | None:
     """Turn 'f6', 'ctrl', 'i', 'esc' into a virtual-key code."""
     return VK.get((name or "").strip().lower())
+
+
+def key_is_down(vk: int) -> bool:
+    """
+    True while the key is physically held.
+
+    This is how hold-to-drop watches ARK's drop key, and it has to be a *read*.
+    RegisterHotKey — what the global hotkeys use — consumes the keystroke before
+    the foreground window sees it, so binding the drop key that way would stop
+    the game from ever receiving it and nothing would drop. GetAsyncKeyState only
+    looks.
+    """
+    return bool(user32.GetAsyncKeyState(int(vk)) & 0x8000)
 
 
 def _scan(vk: int) -> int:

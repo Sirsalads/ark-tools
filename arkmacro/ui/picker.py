@@ -1,5 +1,5 @@
 """
-Full-screen point picker.
+Full-screen pickers, for one point and for an area.
 
 Freezing the screen and letting the player click on a still frame — with a
 magnifier under the cursor — beats a countdown timer: nothing moves, the
@@ -12,6 +12,7 @@ from PySide6.QtCore import QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
+from .. import sweep
 from .. import winapi as w
 from . import theme as T
 
@@ -191,3 +192,178 @@ class ScreenPicker(QWidget):
         painter.setFont(QFont("Segoe UI", 9))
         painter.drawText(banner.adjusted(22, 54, -22, -10),
                          Qt.AlignLeft | Qt.TextWordWrap, self._subtitle)
+
+
+class AreaPicker(QWidget):
+    """
+    Overlay that returns one screen rectangle, in physical pixels.
+
+    Drag a box over the slots you want emptied. The grid the sweep will actually
+    follow is drawn inside the box as you drag, so the dots can be checked
+    against the slot centres before anything is committed — that preview is the
+    whole point of freezing the screen instead of typing four numbers.
+    """
+
+    picked = Signal(int, int, int, int)    # x, y, width, height
+    cancelled = Signal()
+
+    def __init__(self, shot: QPixmap, area: QRect, columns: int, rows: int,
+                 origin: tuple[int, int] = (0, 0)) -> None:
+        super().__init__(None)
+        self._shot = shot
+        self._columns = max(int(columns), 1)
+        self._rows = max(int(rows), 1)
+        self._origin = origin
+        self._anchor: QPoint | None = None
+        self._cursor = QPoint(area.width() // 2, area.height() // 2)
+
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+                            | Qt.Tool)
+        self.setCursor(Qt.CrossCursor)
+        self.setMouseTracking(True)
+        self.setGeometry(area)
+
+    # ------------------------------------------------------------ events
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._cursor = self.mapFromGlobal(QCursor.pos())
+        self.raise_()
+        self.activateWindow()
+        self.setFocus(Qt.OtherFocusReason)
+        self.grabKeyboard()
+
+    def hideEvent(self, event) -> None:
+        self.releaseKeyboard()
+        super().hideEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        self._cursor = event.position().toPoint()
+        self.update()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.LeftButton:
+            self._abort()
+            return
+        self._anchor = event.position().toPoint()
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() != Qt.LeftButton or self._anchor is None:
+            return
+        self._cursor = event.position().toPoint()
+        area = self._selection()
+        if not sweep.usable(area):
+            # a click instead of a drag: keep the overlay up rather than commit
+            # a rectangle too small to hold a single slot
+            self._anchor = None
+            self.update()
+            return
+        self.hide()
+        self.picked.emit(*area)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self._abort()
+
+    def _abort(self) -> None:
+        self.hide()
+        self.cancelled.emit()
+
+    # ------------------------------------------------------------- model
+    def _selection(self) -> list[int]:
+        """The dragged rectangle, in physical screen pixels."""
+        if self._anchor is None:
+            return [0, 0, 0, 0]
+        first, second = self._anchor, self._cursor
+        return sweep.normalise(first.x() + self._origin[0],
+                               first.y() + self._origin[1],
+                               second.x() + self._origin[0],
+                               second.y() + self._origin[1])
+
+    def _widget_rect(self) -> QRect:
+        if self._anchor is None:
+            return QRect()
+        local = sweep.normalise(self._anchor.x(), self._anchor.y(),
+                                self._cursor.x(), self._cursor.y())
+        return QRect(local[0], local[1], local[2], local[3])
+
+    # ------------------------------------------------------------- paint
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        rect = self.rect()
+        painter.drawPixmap(rect, self._shot)
+        painter.fillRect(rect, QColor(4, 8, 12, 110))
+
+        box = self._widget_rect()
+        if not box.isEmpty():
+            # the selection shows the live screen, not the dimmed one
+            painter.drawPixmap(box, self._shot, self._to_shot_rect(box))
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(T.ERR), 2))
+            painter.drawRect(box)
+            self._paint_grid(painter, box)
+
+        self._paint_crosshair(painter, rect)
+        self._paint_banner(painter, rect, box)
+
+    def _to_shot_rect(self, box: QRect) -> QRect:
+        if not self.width() or not self.height():
+            return box
+        sx = self._shot.width() / self.width()
+        sy = self._shot.height() / self.height()
+        return QRect(round(box.x() * sx), round(box.y() * sy),
+                     round(box.width() * sx), round(box.height() * sy))
+
+    def _paint_grid(self, painter: QPainter, box: QRect) -> None:
+        """The sweep path itself: the dots it visits, in the order it visits."""
+        path = sweep.serpentine([box.x(), box.y(), box.width(), box.height()],
+                                self._columns, self._rows)
+        if not path:
+            return
+        painter.setPen(QPen(QColor(T.ACCENT), 1, Qt.DashLine))
+        for start, end in zip(path, path[1:]):
+            painter.drawLine(start[0], start[1], end[0], end[1])
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(T.ACCENT))
+        for x, y in path:
+            painter.drawEllipse(QPoint(x, y), 4, 4)
+        # where the sweep starts, so a grid that is off by one row is obvious
+        painter.setBrush(QColor(T.WARN))
+        painter.drawEllipse(QPoint(*path[0]), 6, 6)
+
+    def _paint_crosshair(self, painter: QPainter, rect: QRect) -> None:
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(T.ACCENT), 1))
+        painter.drawLine(self._cursor.x(), 0, self._cursor.x(), rect.height())
+        painter.drawLine(0, self._cursor.y(), rect.width(), self._cursor.y())
+
+    def _paint_banner(self, painter: QPainter, rect: QRect,
+                      box: QRect) -> None:
+        banner = QRect(rect.center().x() - 330, 46, 660, BANNER_H)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(16, 23, 34, 242))
+        painter.drawRoundedRect(banner, 12, 12)
+        painter.setPen(QPen(QColor(T.ACCENT_DEEP), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(banner, 12, 12)
+
+        painter.setPen(QColor(T.ACCENT))
+        painter.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        painter.drawText(banner.adjusted(22, 12, -22, 0), Qt.AlignLeft,
+                         f"HOLD-TO-DROP AREA · {self._columns} X {self._rows}")
+
+        painter.setPen(QColor(T.TEXT))
+        painter.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
+        painter.drawText(banner.adjusted(22, 28, -22, 0), Qt.AlignLeft,
+                         "Drag a box over the slots to empty")
+
+        if box.isEmpty():
+            detail = ("Every dot is one slot the cursor will stop on. Drag from "
+                      "one corner of the block to the other. Esc cancels.")
+        else:
+            detail = (f"{box.width()} x {box.height()} px — check the dots land "
+                      "on the slot centres, then release to confirm")
+        painter.setPen(QColor(T.MUTED))
+        painter.setFont(QFont("Segoe UI", 9))
+        painter.drawText(banner.adjusted(22, 54, -22, -10),
+                         Qt.AlignLeft | Qt.TextWordWrap, detail)

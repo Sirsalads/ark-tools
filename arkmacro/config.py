@@ -93,6 +93,28 @@ class AntiAfk:
 
 
 @dataclass
+class HoldDrop:
+    """
+    Sweeps the cursor across a block of slots while ARK's drop key is held.
+
+    The app never presses the key — you hold it, the app moves the mouse. So the
+    key here is only *watched*, never registered: a registered hotkey never
+    reaches the game, and then nothing would drop.
+    """
+
+    enabled: bool = False
+    key: str = "o"
+    area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # x,y,w,h
+    # screen size when the area was selected, used to rescale it later
+    area_resolution: list[int] = field(default_factory=lambda: [0, 0])
+    columns: int = 6
+    rows: int = 5
+    # how long the cursor rests on each slot. Too low and the game misses the
+    # hover; on a streamed session it has to cover a round trip
+    dwell_ms: int = 40
+
+
+@dataclass
 class AutoFeed:
     """
     Eats and drinks from the hotbar on a timer, while farming.
@@ -131,6 +153,7 @@ class Config:
     target: Target = field(default_factory=Target)
     anti_afk: AntiAfk = field(default_factory=AntiAfk)
     auto_feed: AutoFeed = field(default_factory=AutoFeed)
+    hold_drop: HoldDrop = field(default_factory=HoldDrop)
     app: App = field(default_factory=App)
 
     # -------------------------------------------------------------- io
@@ -213,6 +236,16 @@ def _point(value: Any) -> list[int]:
         return [0, 0]
 
 
+def _rect(value: Any) -> list[int]:
+    """Coerce whatever is in the file into a usable [x, y, width, height]."""
+    try:
+        rect = [int(value[0]), int(value[1]), int(value[2]), int(value[3])]
+    except (TypeError, ValueError, IndexError, KeyError):
+        return [0, 0, 0, 0]
+    # a negative size would run the sweep backwards out of the panel
+    return rect if rect[2] >= 0 and rect[3] >= 0 else [0, 0, 0, 0]
+
+
 def _count(value: Any, fallback: int, low: int, high: int) -> int:
     """Clamp a hand-edited number into the range the engine can act on."""
     try:
@@ -257,6 +290,15 @@ def _sanitize(cfg: "Config") -> None:
     feed.gap_ms = _count(feed.gap_ms, 350, 50, 3000)
     feed.food_key = str(feed.food_key).strip().lower()
     feed.water_key = str(feed.water_key).strip().lower()
+
+    hold = cfg.hold_drop
+    hold.area = _rect(hold.area)
+    hold.area_resolution = _point(hold.area_resolution)
+    # a 40x40 grid would be 1600 slots of nothing; ARK's panels are far smaller
+    hold.columns = _count(hold.columns, 6, 1, 20)
+    hold.rows = _count(hold.rows, 5, 1, 20)
+    hold.dwell_ms = _count(hold.dwell_ms, 40, 5, 1000)
+    hold.key = str(hold.key).strip().lower()
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

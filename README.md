@@ -267,6 +267,63 @@ later. Switching the profile does three things:
 **Recapture your points after switching.** Background delivery is **greyed out**
 on this profile — see below.
 
+## Hold-to-drop
+
+**Points → Hold-to-drop.** Nothing to do with the farm loop. Hold ARK's drop key
+over a block of slots and the cursor sweeps them, dropping every stack it passes
+— for emptying a forge or a bag by hand, fast.
+
+**The app never presses the key. You hold it, the app moves the mouse.** That is
+not a preference, it is the only way this can work:
+
+> A key registered as a global hotkey is **swallowed before the game sees it**.
+> Bind the drop key that way and ARK never receives it — the cursor would tour
+> the slots and drop nothing at all.
+
+So the key is only *watched*, with `GetAsyncKeyState`, which reads the keyboard
+without consuming anything. Everything else the app owns: the path, the pace, and
+when to refuse.
+
+### Selecting the area
+
+The button freezes the screen. Drag a box over the block you want emptied, and
+the **actual sweep path is drawn inside it as you drag** — a dot on every slot it
+will stop on, a line for the order, and an orange dot where it starts. Release to
+confirm, Esc to cancel.
+
+That preview is the point of freezing the screen rather than typing four numbers:
+you can see the dots land on the slot centres before anything is committed. If
+they sit between slots, change **Columns** and **Rows** and drag again.
+
+### The path is a serpentine, not a circle
+
+A circle over that block only touches the slots on its own ring and leaves
+everything inside untouched. The sweep goes row by row, reversing direction each
+row, so it visits every slot and never jumps back across the grid — a long jump
+would cross slots that are *not* part of the block, and with the drop key held it
+would drop those too.
+
+### What it refuses to do
+
+- **Sweep while the macro is farming.** An autoclick loose in an open inventory
+  moves items around; the sweep would be the least of the damage. Stop the macro
+  first — it says so in the log.
+- **Sweep while ARK is not in front**, or over the frozen picker.
+- **Watch a key that does not exist.** A typo in the field disarms the watcher
+  instead of polling nothing forever.
+
+### Settings that matter
+
+- **Time per slot** (40 ms): how long the cursor rests on each slot. Too low and
+  the game misses the hover. On GeForce NOW each slot costs a round trip, so
+  raise it — the status line under the button tells you how long a full lap takes
+  at the current setting.
+- **Columns / Rows**: the grid inside the box. The status line turns them into a
+  slot count so a 6×5 that should have been 4×4 is obvious before you use it.
+
+The cursor goes back where it was when you release the key, and the area is
+rescaled if your screen resolution changes — verify it after, same as the points.
+
 ## Auto-feed
 
 **Settings → Auto-feed.** Presses two hotbar slots on a timer so the character
@@ -393,8 +450,9 @@ arkmacro/engine.py       farm <-> drop state machine
 arkmacro/config.py       config.json persistence, migrates older formats
 arkmacro/presets.py      ARK template library plus risk notes
 arkmacro/layout.py       HUD geometry model (estimate / rescale points)
+arkmacro/sweep.py        hold-to-drop path across a block of slots
 arkmacro/updater.py      self-update by fast-forwarding this clone
-arkmacro/ui/picker.py    frozen-screen point picker with magnifier
+arkmacro/ui/picker.py    frozen-screen pickers: one point, or an area
 arkmacro/ui/backdrop.py  gradient, glows and the brand melt
 arkmacro/ui/icons.py     vector icons drawn with QPainter
 arkmacro/ui/             theme, widgets and the main window (PySide6)

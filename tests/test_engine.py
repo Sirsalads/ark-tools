@@ -19,6 +19,7 @@ from PySide6.QtCore import QCoreApplication  # noqa: E402
 from arkmacro import engine as eng  # noqa: E402
 from arkmacro import layout as ark_layout  # noqa: E402
 from arkmacro import presets  # noqa: E402
+from arkmacro import sweep as ark_sweep  # noqa: E402
 from arkmacro.config import Config  # noqa: E402
 from arkmacro.hotkeys import (MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,  # noqa: E402
                               parse)
@@ -502,6 +503,43 @@ assert windowed == [377, 243], windowed
 assert ark_layout.rescale([277, 193], [1920, 1080], [1920, 1080]) == [277, 193]
 assert ark_layout.rescale([277, 193], [1920, 1080], [2560, 1440]) == [369, 257]
 print("OK  point estimation and rescaling")
+
+# ------------------------------------------- 7b) hold-to-drop sweep path
+# Every slot in the block has to be visited, which is why the path is a
+# serpentine and not the circle it looks like on screen: a circle only touches
+# its own ring and leaves every slot inside it untouched.
+path = ark_sweep.serpentine([100, 200, 240, 200], 4, 4)
+assert len(path) == 16, f"{len(path)} points for a 4x4 block"
+assert len(set(path)) == 16, "the sweep visits a slot twice and misses another"
+# rows alternate, so the cursor never jumps back across the grid
+assert path[:4] == [(130, 225), (190, 225), (250, 225), (310, 225)], path[:4]
+assert path[4:8] == [(310, 275), (250, 275), (190, 275), (130, 275)], path[4:8]
+# consecutive points are one pitch apart — a longer step would cross a slot
+# that is not part of the block, and while the drop key is held it would drop it
+pitch = 240 / 4
+for before, after in zip(path, path[1:]):
+    step = max(abs(after[0] - before[0]), abs(after[1] - before[1]))
+    assert step <= pitch + 1, f"the path jumps {step}px from {before}"
+
+# every point lands inside the block, never on its border
+for x, y in path:
+    assert 100 < x < 340 and 200 < y < 400, (x, y)
+
+# a drag in any direction gives the same rectangle
+assert ark_sweep.normalise(340, 400, 100, 200) == [100, 200, 240, 200]
+assert ark_sweep.normalise(100, 200, 340, 400) == [100, 200, 240, 200]
+
+# a stray click is not a selection
+assert ark_sweep.serpentine([0, 0, 10, 10], 4, 4) == []
+assert not ark_sweep.usable([0, 0, 10, 10]) and ark_sweep.usable([0, 0, 240, 200])
+assert not ark_sweep.usable("nonsense") and not ark_sweep.usable([1, 2])
+
+# and the block scales with screen height, like everything else in the HUD
+assert ark_sweep.rescale([100, 200, 240, 200], [1920, 1080],
+                         [1920, 1080]) == [100, 200, 240, 200]
+grown = ark_sweep.rescale([100, 200, 240, 200], [1920, 1080], [2560, 1440])
+assert grown[2:] == [320, 267], grown
+print(f"OK  the sweep visits all {len(path)} slots, in a serpentine")
 
 # ------------------------------------------------- 8) config migration
 legacy = pathlib.Path(tempfile.gettempdir()) / "ark_macro_legacy.json"

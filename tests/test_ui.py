@@ -550,6 +550,113 @@ win._pull()
 assert win.cfg.drop.close_with == "esc" and win.cfg.drop.close_presses == 2
 print("OK  the close press count follows the key that gets sent")
 
+# ------------------------------------------------- 22) hold-to-drop sweep
+win.stack.setCurrentIndex(3)
+moves: list[tuple[int, int]] = []
+held = {"down": False}
+w_module.move_cursor = lambda x, y: moves.append((x, y))
+w_module.get_cursor_pos = lambda: (7, 9)
+w_module.key_is_down = lambda _vk: held["down"]
+w_module.is_foreground = lambda _h: True
+w_module.find_window = lambda _f: 1
+
+# no area picked yet: nothing to sweep, so the watcher stays off
+win.cfg.hold_drop.area = [0, 0, 0, 0]
+win.sw_hold.switch.setChecked(True)
+win._pull()
+assert not win._hold_watch.isActive(), "armed without an area"
+assert "No area selected" in win.lbl_hold_area.text()
+
+# with an area, the watcher runs — but only the key starts a sweep
+win.cfg.hold_drop.area = [100, 200, 240, 200]
+win.cfg.hold_drop.area_resolution = list(w_module.screen_size())
+win.ed_hold_key.setText("o")
+win.sp_hold_cols.setValue(4)
+win.sp_hold_rows.setValue(4)
+win.sp_hold_dwell.setValue(5)
+win._pull()
+assert win._hold_watch.isActive(), "an area was set and it did not arm"
+assert "16 slots" in win.lbl_hold_area.text(), win.lbl_hold_area.text()
+
+win._watch_hold_key()
+assert not win._sweep_timer.isActive(), "swept without the key being held"
+assert moves == [], f"moved the mouse with the key up: {moves}"
+
+# key down: the sweep starts and walks the slots one tick at a time
+held["down"] = True
+win._watch_hold_key()
+assert win._sweep_timer.isActive(), "holding the key did not start the sweep"
+for _ in range(18):
+    win._sweep_step()
+assert len(moves) == 18, f"{len(moves)} moves for 18 ticks"
+assert moves[:4] == [(130, 225), (190, 225), (250, 225), (310, 225)], moves[:4]
+# and it loops: slot 17 is slot 1 again
+assert moves[16] == moves[0], "the sweep stopped instead of looping"
+
+# key up: it stops within one slot and puts the pointer back
+held["down"] = False
+win._sweep_step()
+assert not win._sweep_timer.isActive(), "kept sweeping after the key came up"
+assert moves[-1] == (7, 9), f"the cursor was left on a slot: {moves[-1]}"
+print("OK  hold-to-drop sweeps while the key is held, and loops")
+
+# ------------------------- 22b) the guards around it
+held["down"] = True
+moves.clear()
+
+
+class Farming:
+    @staticmethod
+    def isRunning():
+        return True
+
+
+# an autoclick loose in an open inventory would move items, not drop them
+win.engine = Farming()
+win._watch_hold_key()
+assert not win._sweep_timer.isActive(), "swept while the macro was farming"
+win.engine = None
+
+# nor into whatever else has focus
+w_module.is_foreground = lambda _h: False
+win._watch_hold_key()
+assert not win._sweep_timer.isActive(), "swept while ARK was not in front"
+w_module.is_foreground = lambda _h: True
+
+# nor over the frozen picker
+win._picking = True
+win._watch_hold_key()
+assert not win._sweep_timer.isActive(), "swept while picking"
+win._picking = False
+
+# a key name that does not exist disarms instead of watching nothing forever
+win.ed_hold_key.setText("not-a-key")
+win._pull()
+win._watch_hold_key()
+assert not win._hold_watch.isActive(), "kept watching a key that cannot exist"
+assert not win._sweep_timer.isActive()
+assert moves == [], f"moved the mouse in a case it should have refused: {moves}"
+
+win.ed_hold_key.setText("o")
+win.sw_hold.switch.setChecked(False)
+win._pull()
+assert not win._hold_watch.isActive(), "disabling did not stop the watcher"
+held["down"] = False
+print("OK  hold-to-drop refuses while farming, unfocused, picking or misbound")
+
+# ------------------------- 22c) the area picker previews the real path
+from arkmacro.ui.picker import AreaPicker  # noqa: E402
+
+area_picker = AreaPicker(shot, QRect(0, 0, 800, 600), 4, 4, (1920, 0))
+area_picker._anchor = QPoint(340, 400)
+area_picker._cursor = QPoint(100, 200)
+# dragged bottom-right to top-left, on a second monitor: still the same box,
+# and the origin puts it back in physical desktop coordinates
+assert area_picker._selection() == [2020, 200, 240, 200], area_picker._selection()
+assert area_picker._widget_rect() == QRect(100, 200, 240, 200)
+area_picker.deleteLater()
+print("OK  the area picker normalises the drag and offsets to the real screen")
+
 win.hotkeys.stop()
 win.close()
 print("\nALL UI TESTS PASSED")
