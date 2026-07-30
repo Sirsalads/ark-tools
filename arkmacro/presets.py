@@ -25,6 +25,10 @@ PRESETS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
         ("Stone", "stone", "high",
          "Also matches Stone Pick and Stone Hatchet. Switch to metal tools "
          "before arming this one."),
+        ("Metal", "metal", "high",
+         "Every metal tool, armor piece and structure carries the word, and "
+         "Metal Ingot does too. There is no substring that catches the ore "
+         "alone — empty your bag of metal gear before arming this one."),
         ("Flint", "flint", "ok", "Safe — no tool is named Flint."),
         ("Obsidian", "obsidian", "ok", "Resource only."),
         ("Crystal", "crystal", "ok", "Resource only."),

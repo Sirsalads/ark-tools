@@ -119,7 +119,6 @@ cfg.drop.templates = [
     {"name": "Disabled", "keyword": "wood", "enabled": False},
     {"name": "Stone", "keyword": "stone", "enabled": True},
 ]
-cfg.drop.clear_backspaces = 3
 cfg.drop.open_wait_ms = 10
 cfg.drop.close_wait_ms = 10
 cfg.drop.after_type_wait_ms = 10
@@ -132,17 +131,14 @@ engine._running = True
 engine._run_drop()
 
 expected = [
-    ("key", hex(0x49)),                 # open the inventory
-    ("click_at", 960, 300),             # focus the filter field
-    *[("key", hex(0x08))] * 3,          # wipe the previous text
-    ("type", "thatch"),                 # type the keyword
-    ("click_at", 1400, 900),            # Drop All
+    ("key", hex(0x49)),                       # open the inventory
+    ("click_at", 960, 300),                   # focus the filter field
+    *[("key", hex(0x08))] * eng.CLEAR_KEYS,   # a human may have left a word in
+    ("type", "thatch"),                       # type the keyword
+    ("click_at", 1400, 900),                  # Drop All
     ("click_at", 960, 300),
-    *[("key", hex(0x08))] * 3,
-    ("type", "stone"),
+    ("type", "stone"),                        # no wipe: the drop cleared the box
     ("click_at", 1400, 900),
-    ("click_at", 960, 300),             # clear the filter at the end
-    *[("key", hex(0x08))] * 3,
     ("key", hex(0x1B)),                 # Esc leaves the search field
     ("key", hex(0x1B)),                 # and only then closes the inventory
 ]
@@ -150,6 +146,14 @@ assert calls == expected, f"\nexpected:\n{expected}\ngot:\n{calls}"
 assert not any(c == ("type", "wood") for c in calls), \
     "an unchecked template must not enter the cycle"
 print(f"OK  drop pass order ({len(calls)} actions, unchecked one skipped)")
+
+# ------------------------------ 1a) the box is only wiped where ARK has not
+# ARK empties the search box when Drop All fires, so a wipe per template is
+# 24 keystrokes of nothing. One per pass is what is left, for the box a human
+# may have typed in.
+wipes = sum(1 for c in calls if c == ("key", hex(0x08)))
+assert wipes == eng.CLEAR_KEYS, f"{wipes} backspaces for two templates"
+print("OK  the search box is wiped once per pass, not once per template")
 
 # --------------------------------------- 1b) the close key is configurable
 for presses, close_with, key in ((1, "same", 0x49), (3, "esc", 0x1B)):
@@ -192,6 +196,9 @@ def close_with_screen(shuts_at: int) -> list[tuple]:
     screen = Panel(shuts_at)
     original_tap, original_pixel = FakeW.tap, FakeW.screen_pixel
     FakeW.tap, FakeW.screen_pixel = screen.tap, screen.pixel
+    # this screen answers the same colour everywhere, so the search box never
+    # looks like it took the keyword — and the close phase is what is under test
+    verify, cfg.drop.verify_filter = cfg.drop.verify_filter, False
     try:
         calls.clear()
         probe_engine = eng.MacroEngine(cfg)
@@ -200,6 +207,7 @@ def close_with_screen(shuts_at: int) -> list[tuple]:
         probe_engine._run_drop()
     finally:
         FakeW.tap, FakeW.screen_pixel = original_tap, original_pixel
+        cfg.drop.verify_filter = verify
     # everything after the last Drop All click is the close phase
     last_drop = max(i for i, c in enumerate(calls) if c == ("click_at", 1400, 900))
     return [c for c in calls[last_drop:] if c[0] == "key" and c[1] == hex(0x1B)]
@@ -214,6 +222,89 @@ stubborn = close_with_screen(99)
 assert len(stubborn) == eng.CLOSE_ATTEMPTS, stubborn
 print(f"OK  the close checks the panel: 1 press when 1 is enough, "
       f"{eng.CLOSE_ATTEMPTS} at most")
+
+# ------------------------- 1d) nothing typed, nothing dropped
+# The half second after typing is a hope, not a check: if the click missed the
+# search field or the stream swallowed the keys, the box is empty and Drop All
+# would empty the entire inventory. So the box is read before and after.
+BOX = (18, 22, 26)
+GLYPH = (232, 238, 240)
+
+
+class Box:
+    """
+    Screen where the search box fills in only when `shows_text` is set.
+
+    Reads on the filter band answer for the box, everything else answers for the
+    panel — the panel probes run along the line to Drop All, well below it.
+    """
+
+    def __init__(self, shows_text: bool) -> None:
+        self.shows_text = shows_text
+        self.filled = False
+        self.presses = 0
+
+    def pixel(self, x, y):
+        if abs(y - 300) <= 8:
+            filled = self.filled and self.shows_text and 960 <= x <= 1040
+            return GLYPH if filled else BOX
+        return WORLD if self.presses else PANEL
+
+    def type_text(self, text, delay=0.0, unicode_mode=False):
+        calls.append(("type", text))
+        self.filled = True
+
+    def click_at(self, x, y, button="left", hold=0.0, settle=0.0):
+        calls.append(("click_at", x, y))
+        if (x, y) == (1400, 900):      # Drop All: ARK empties the filter itself
+            self.filled = False
+
+    def tap(self, vk, hold=0.0):
+        calls.append(("key", hex(vk)))
+        if vk == 0x1B:
+            self.presses += 1
+        elif vk == 0x08:
+            self.filled = False        # a wipe leaves the box empty again
+
+
+def drop_against(screen: Box) -> tuple[list[tuple], eng.MacroEngine]:
+    original = (FakeW.tap, FakeW.screen_pixel, FakeW.type_text, FakeW.click_at)
+    FakeW.tap, FakeW.screen_pixel = screen.tap, screen.pixel
+    FakeW.type_text, FakeW.click_at = screen.type_text, screen.click_at
+    try:
+        calls.clear()
+        checked = eng.MacroEngine(cfg)
+        checked.log.connect(lambda _m, _l: None)
+        checked._running = True
+        checked._run_drop()
+    finally:
+        (FakeW.tap, FakeW.screen_pixel, FakeW.type_text,
+         FakeW.click_at) = original
+    return list(calls), checked
+
+
+# the keyword shows up in the box: the pass runs exactly as before
+visible, ran = drop_against(Box(shows_text=True))
+assert sum(1 for c in visible if c == ("click_at", 1400, 900)) == 2, visible
+assert ran.drops == 1, "a pass that dropped was not counted"
+
+# the keyword never appears: no Drop All goes out at all
+blind, skipped_pass = drop_against(Box(shows_text=False))
+assert not any(c == ("click_at", 1400, 900) for c in blind), \
+    "Drop All was clicked with an empty search box"
+assert ("type", "stone") in blind, "it stopped the pass instead of skipping one"
+# and a pass that dropped nothing is not a pass done — the weight is still up
+assert skipped_pass.drops == 0, "an empty pass counted on the dashboard"
+# and the filter is wiped on the way out, since no drop cleared it
+esc = min(i for i, c in enumerate(blind) if c == ("key", hex(0x1B)))
+assert blind[esc - 1] == ("key", hex(0x08)), blind[esc - 4:esc]
+
+# with the check off it goes out anyway — the setting is a real switch
+cfg.drop.verify_filter = False
+unchecked, _ = drop_against(Box(shows_text=False))
+cfg.drop.verify_filter = True
+assert sum(1 for c in unchecked if c == ("click_at", 1400, 900)) == 2
+print("OK  Drop All only fires when the keyword is visibly in the box")
 
 # ------------------------------------------------- 2) dry run never drops
 calls.clear()
@@ -291,7 +382,9 @@ cfg.drop.interval_s = 1
 timer_engine = eng.MacroEngine(cfg)
 timer_engine.log.connect(lambda _m, _l: None)
 timer_engine.start()
-pump(1.4)
+# the interval is up at 1 s and the pass itself needs a moment: the box gets
+# wiped once per pass, and that is 24 keystrokes before the first keyword
+pump(2.4)
 timer_engine.request_stop()
 timer_engine.wait(3000)
 assert any(c == ("click_at", 1400, 900) for c in calls), "timer trigger failed"
@@ -424,7 +517,6 @@ timed.target.require_focus = False
 timed.drop.filter_point = [10, 10]
 timed.drop.dropall_point = [20, 20]
 timed.drop.templates = [{"name": "T", "keyword": "thatch", "enabled": True}]
-timed.drop.clear_backspaces = 0
 for field_name in ("open_wait_ms", "close_wait_ms", "after_type_wait_ms",
                    "after_drop_wait_ms"):
     setattr(timed.drop, field_name, 0)
@@ -445,11 +537,31 @@ start = time.perf_counter()
 streamed._run_drop()
 with_stream = time.perf_counter() - start
 
-# one pass has 9 waits — seven, plus one after each of the two close presses —
-# so the allowance should add roughly 9 * 120ms
+# one pass has 8 waits — six, plus one after each of the two close presses —
+# so the allowance should add roughly 8 * 120ms
 added = with_stream - baseline
 assert 0.85 <= added <= 1.30, f"latency allowance added {added:.2f}s"
 print(f"OK  stream latency stretches every wait (+{added:.2f}s at 120ms)")
+
+# ------------------------- 13b) background delivery cannot reach a stream
+# The GeForce NOW client forwards real input from whatever has focus; a message
+# posted to its window stops at the window. Arming anyway would pay every wait
+# and send nothing into the game.
+streamed_bg = Config()
+streamed_bg.target.mode = "background"
+streamed_bg.target.platform = "geforce_now"
+streamed_bg.target.start_delay_s = 0
+streamed_bg.drop.enabled = False
+levels: list[str] = []
+refuser = eng.MacroEngine(streamed_bg)
+refuser.log.connect(lambda _m, level: levels.append(level))
+calls.clear()
+refuser.start()
+refuser.wait(3000)
+app.processEvents()
+assert not calls, f"it sent input into a stream it cannot reach: {calls}"
+assert "err" in levels, levels
+print("OK  background delivery on GeForce NOW refuses to arm, loudly")
 
 # ------------------------------------------- 14) letterboxed video area
 assert ark_layout.video_area(0, 0, 1920, 1080) == (0, 0, 1920, 1080)

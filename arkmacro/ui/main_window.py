@@ -319,11 +319,12 @@ class MainWindow(QWidget):
         cycle = Card("What one drop pass does")
         for number, title, detail in (
             ("1", "Pause and open", "stops clicking and presses the inventory key"),
-            ("2", "Focus the filter", "clicks the search field and clears it"),
+            ("2", "Focus the filter", "clicks the search field"),
             ("3", "Type the keyword", "one enabled template at a time"),
-            ("4", "Drop All", "with the filter on, only what is listed falls"),
-            ("5", "Repeat and resume",
-             "clears the filter, closes with Esc twice, back to farming"),
+            ("4", "Check the box", "reads it — no keyword in there, no drop"),
+            ("5", "Drop All", "with the filter on, only what is listed falls"),
+            ("6", "Repeat and resume",
+             "the drop clears the filter, Esc closes, back to farming"),
         ):
             cycle.add(step_row(number, title, detail))
         lay.addWidget(cycle)
@@ -427,6 +428,23 @@ class MainWindow(QWidget):
             "takes everything listed. Rows marked ⚠ carry that risk.", warn=True))
         lay.addWidget(card)
 
+        guard = Card(
+            "Before every Drop All",
+            "Waiting half a second for the filter to appear is a hope, not a "
+            "check — and an unfiltered Drop All empties the whole bag. So the "
+            "macro reads the search box before and after typing: no change in "
+            "those pixels means nothing was typed, and the drop is skipped.")
+        self.sw_verify = SwitchRow("Only drop when the keyword reached the "
+                                   "search box", self.cfg.drop.verify_filter)
+        guard.add(self.sw_verify)
+        guard.add(hint_label(
+            "It sees that there is text, not which text — a keyword that got in "
+            "halfway still passes. Turn it off only to measure how often the "
+            "check trips on your connection: the drop then goes out anyway and "
+            "the log says the box looked empty. Needs the screen to be "
+            "readable, so borderless or windowed, foreground delivery."))
+        lay.addWidget(guard)
+
         dry = Card("Dry run",
                    "Runs the whole cycle — opens, filters, types — but never "
                    "clicks Drop All. Saves a screenshot of the filtered "
@@ -461,13 +479,10 @@ class MainWindow(QWidget):
         self.sp_drop_wait = spin(50, 5000, self.cfg.drop.after_drop_wait_ms,
                                  " ms", 50)
         self.sp_close_wait = spin(100, 8000, self.cfg.drop.close_wait_ms, " ms", 50)
-        self.sp_backspaces = spin(0, 80, self.cfg.drop.clear_backspaces, "x", 1)
         igrid.add("Wait after opening", self.sp_open_wait)
         igrid.add("Wait after typing", self.sp_type_wait)
         igrid.add("Wait after Drop All", self.sp_drop_wait)
         igrid.add("Wait after closing", self.sp_close_wait)
-        igrid.add("Backspaces to clear", self.sp_backspaces,
-                  "Must be longer than your longest keyword")
         timing.add(igrid)
         timing.add(hint_label(
             "Typing the filter leaves the search field holding the keyboard, "
@@ -613,7 +628,7 @@ class MainWindow(QWidget):
         self.cb_mode = combo(["Foreground (recommended)", "Background (experimental)"],
                              0 if self.cfg.target.mode == "foreground" else 1,
                              width=230)
-        self.cb_mode.currentIndexChanged.connect(self._sync_mode_note)
+        self.cb_mode.currentIndexChanged.connect(self._on_mode_changed)
         mgrid = FormGrid(pairs=1)
         mgrid.add("Where ARK runs", self.cb_platform)
         mgrid.add("Delivery mode", self.cb_mode)
@@ -683,6 +698,7 @@ class MainWindow(QWidget):
 
         lay.addWidget(self._updates_card())
         lay.addStretch(1)
+        self._sync_delivery_options(announce=False)
         self._sync_mode_note()
         self._sync_platform_note()
         return page
@@ -783,9 +799,37 @@ class MainWindow(QWidget):
                 self.ed_window.setText("ARK")
             if self.sp_latency.value() == 250:
                 self.sp_latency.setValue(0)
+        self._sync_delivery_options()
         self._sync_platform_note()
         self._sync_mode_note()
         self._on_change()
+
+    def _on_mode_changed(self) -> None:
+        # the check runs on every change, not only when the platform moves: a
+        # stored config or a stray setCurrentIndex must not land on a delivery
+        # mode that cannot reach the game
+        self._sync_delivery_options()
+        self._sync_mode_note()
+
+    def _sync_delivery_options(self, announce: bool = True) -> None:
+        """
+        Background delivery is not offered for a streamed session.
+
+        It cannot work: the client grabs real input and forwards it over the
+        network, so a posted message reaches its window and stops there. Leaving
+        it selectable only buys a session that farms nothing.
+
+        `announce` is off while the pages are still being built — the log view
+        does not exist yet at that point.
+        """
+        item = self.cb_mode.model().item(1)
+        if item is not None:
+            item.setEnabled(not self._streaming)
+        if self._streaming and self.cb_mode.currentIndex() == 1:
+            self.cb_mode.setCurrentIndex(0)
+            if announce:
+                self._log("background delivery cannot reach a GeForce NOW "
+                          "session — switched back to foreground", "warn")
 
     def _sync_platform_note(self) -> None:
         if self._streaming:
@@ -800,11 +844,14 @@ class MainWindow(QWidget):
                 "The game is installed and running on this machine.")
 
     def _sync_mode_note(self) -> None:
-        if self._streaming and self.cb_mode.currentIndex() == 1:
+        if self._streaming:
             self.mode_note.setText(
-                "Background delivery cannot work through GeForce NOW: the "
-                "client captures real input and forwards it, and posted "
-                "messages never reach the stream. Use foreground.")
+                "Background is greyed out on GeForce NOW, and no setting can "
+                "bring it back: the client forwards real input from whatever "
+                "has focus, so a message posted to its window never enters the "
+                "stream. Farming while you use the PC needs a second machine, "
+                "or ARK streamed inside a VM with the macro running in the "
+                "guest — see the README.")
             return
         if self.cb_mode.currentIndex() == 0:
             self.mode_note.setText(
@@ -854,7 +901,7 @@ class MainWindow(QWidget):
             self.cb_close,
             self.sp_close_presses,
             self.sp_open_wait, self.sp_close_wait, self.sp_type_wait,
-            self.sp_drop_wait, self.sp_backspaces, self.sp_fx, self.sp_fy,
+            self.sp_drop_wait, self.sw_verify.switch, self.sp_fx, self.sp_fy,
             self.sp_dx, self.sp_dy, self.cb_mode, self.ed_window,
             self.sw_focus.switch, self.sp_delay, self.chk_unicode,
             self.hk_toggle, self.hk_drop, self.hk_panic, self.hk_pick,
@@ -904,7 +951,7 @@ class MainWindow(QWidget):
         drop.close_wait_ms = self.sp_close_wait.value()
         drop.after_type_wait_ms = self.sp_type_wait.value()
         drop.after_drop_wait_ms = self.sp_drop_wait.value()
-        drop.clear_backspaces = self.sp_backspaces.value()
+        drop.verify_filter = self.sw_verify.switch.isChecked()
         drop.filter_point = [self.sp_fx.value(), self.sp_fy.value()]
         drop.dropall_point = [self.sp_dx.value(), self.sp_dy.value()]
         drop.templates = self.tpl_editor.templates()

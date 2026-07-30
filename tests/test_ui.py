@@ -136,6 +136,7 @@ print("OK  trigger fields show and hide with the label")
 
 # ------------------------------------------------- 5) config round trip
 win.sw_dry.switch.setChecked(True)
+win.sw_verify.switch.setChecked(False)
 win.cb_mode.setCurrentIndex(1)
 win.sp_cps_min.setValue(11.5)
 win.ed_inv_key.setText("TAB")
@@ -149,6 +150,7 @@ win._save()
 
 reloaded = Config.load(sandbox)
 assert reloaded.drop.dry_run is True
+assert reloaded.drop.verify_filter is False, "the filter check did not persist"
 assert reloaded.target.mode == "background"
 assert reloaded.autoclick.cps_min == 11.5
 assert reloaded.drop.inventory_key == "tab", reloaded.drop.inventory_key
@@ -340,11 +342,15 @@ assert win.ed_window.text() == "GeForce NOW", "did not retarget the client"
 assert win.cfg.target.stream_latency_ms == 250, "no latency allowance"
 assert "GeForce NOW" in win.platform_note.text()
 
-# background delivery is impossible through the stream, and it says so
+# background delivery is impossible through the stream: the entry is greyed
+# out, the note says why, and anything that selects it anyway is bounced back
+assert not win.cb_mode.model().item(1).isEnabled(), \
+    "background delivery is still selectable on a streamed session"
+assert "greyed out on GeForce NOW" in win.mode_note.text()
 win.cb_mode.setCurrentIndex(1)
 app.processEvents()
-assert "cannot work through GeForce NOW" in win.mode_note.text()
-win.cb_mode.setCurrentIndex(0)
+assert win.cb_mode.currentIndex() == 0, "background delivery stuck on GFN"
+assert win.cfg.target.mode == "foreground", win.cfg.target.mode
 
 # a hand-picked title and latency survive going back to native
 win.ed_window.setText("ArkAscended")

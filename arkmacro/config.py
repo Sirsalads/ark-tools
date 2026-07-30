@@ -46,9 +46,12 @@ class DropRoutine:
     points_resolution: list[int] = field(default_factory=lambda: [0, 0])
     # each template: {"name": str, "keyword": str, "enabled": bool}
     templates: list[dict] = field(default_factory=default_templates)
-    clear_backspaces: int = 24
     after_type_wait_ms: int = 500   # let the filter settle
     after_drop_wait_ms: int = 450   # let the drop go through
+    # read the search box before and after typing, and skip Drop All when the
+    # keyword did not visibly land in it — an unfiltered Drop All empties the
+    # entire inventory
+    verify_filter: bool = True
     unicode_typing: bool = False
     # dry run: filter and screenshot, but never click Drop All
     dry_run: bool = False
@@ -216,6 +219,9 @@ def _sanitize(cfg: "Config") -> None:
     # zero presses would leave the inventory open for the rest of the session
     drop.close_presses = _count(drop.close_presses, 2, 1, 5)
     drop.min_farm_s = _count(drop.min_farm_s, 20, 0, 3600)
+    # anything that is not plainly off leaves the check on: the failure it
+    # guards against costs the whole inventory
+    drop.verify_filter = bool(drop.verify_filter)
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

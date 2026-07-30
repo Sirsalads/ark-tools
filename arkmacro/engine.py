@@ -35,6 +35,22 @@ PROBE_TOLERANCE = 16
 # how far apart the two points have to be before the probes mean anything
 PROBE_MIN_SPAN = 40
 
+# Reading the search box, to tell an empty one from one holding a keyword.
+# The box is sampled on a horizontal band around the filter point: how wide is
+# derived from the distance to Drop All, which is the only ruler there is for
+# how large the HUD is drawn on this screen.
+FILTER_PROBE_REACH = 0.3          # of the filter -> Drop All distance, each way
+FILTER_PROBE_STEPS = 15           # samples across the band
+FILTER_PROBE_ROWS = (-4, 0, 4)    # and on three rows, to catch the glyph bodies
+# Two samples is the threshold on purpose. One is the caret: it blinks, and it
+# sits where the first letter would be, so a single moved pixel proves nothing.
+FILTER_CHANGED_MIN = 2
+# A wipe of the search box. The game clears the filter itself when Drop All
+# fires, so this is only for the boxes it has not cleared: the first template of
+# a pass (a human may have left something in there), a dry run, and the template
+# after a drop that was skipped. Longer than any sane keyword.
+CLEAR_KEYS = 24
+
 
 class MacroEngine(QThread):
     log = Signal(str, str)            # message, level (info|ok|warn|err)
@@ -128,7 +144,7 @@ class MacroEngine(QThread):
             w.type_text(text, delay=0.05,
                         unicode_mode=self.cfg.drop.unicode_typing)
 
-    def _backspaces(self, count: int) -> None:
+    def _clear_field(self, count: int = CLEAR_KEYS) -> None:
         vk = w.vk_from_name("backspace")
         for _ in range(count):
             if not self._running:
@@ -138,6 +154,58 @@ class MacroEngine(QThread):
             else:
                 w.tap(vk, hold=0.015)
             time.sleep(0.02)
+
+    # ------------------------------------------- did the keyword get in there
+    def _probe_filter(self) -> list[tuple[int, int, int]] | None:
+        """
+        Colours across the search box, or None when it cannot be read.
+
+        Read twice — before and after typing — these say whether anything
+        actually landed in the box. Background delivery is excluded for the same
+        reason as the panel probes: the game is behind other windows, so those
+        screen coordinates belong to somebody else.
+
+        The mouse cursor is parked on the filter point when both readings are
+        taken, so whatever it covers is covered identically in both and simply
+        carries no information. That is why a count of moved samples is the
+        measure here, never a demand that all of them move.
+        """
+        d = self.cfg.drop
+        if self.cfg.target.mode == "background":
+            return None
+        start, end = d.filter_point, d.dropall_point
+        span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+        if not any(start) or not any(end) or span < PROBE_MIN_SPAN:
+            return None
+        reach = max(round(span * FILTER_PROBE_REACH), 12)
+        colours = []
+        for row in FILTER_PROBE_ROWS:
+            for step in range(FILTER_PROBE_STEPS):
+                fraction = step / (FILTER_PROBE_STEPS - 1)
+                x = round(start[0] - reach + 2 * reach * fraction)
+                colour = w.screen_pixel(x, start[1] + row)
+                if colour is None:
+                    return None
+                colours.append(colour)
+        return colours
+
+    def _filter_took(self, reference) -> bool | None:
+        """
+        True when the search box changed after the keyword was typed.
+
+        None means the question could not be answered — no reference, or the
+        screen stopped reading — and the caller carries on as it always did.
+        """
+        if reference is None:
+            return None
+        now = self._probe_filter()
+        if now is None or len(now) != len(reference):
+            return None
+        changed = sum(
+            1 for before, after in zip(reference, now)
+            if any(abs(a - b) > PROBE_TOLERANCE for a, b in zip(before, after))
+        )
+        return changed >= FILTER_CHANGED_MIN
 
     # ------------------------------------------------ is the panel still up
     def _probe_panel(self) -> list[tuple[int, int, int]] | None:
@@ -256,24 +324,59 @@ class MacroEngine(QThread):
         if not self._wait(d.open_wait_ms):
             return
 
+        # ARK empties the search box itself when Drop All fires, so the macro
+        # only wipes it where the game has not: the first template of the pass,
+        # because a human may have left a word in there, and after any template
+        # whose drop was skipped.
+        stale_box = True
+        unreadable_logged = False
+        dropped = 0
+
         for template in templates:
             if not self._running:
                 return
             keyword = str(template["keyword"]).strip()
 
-            # 2) focus the filter field and wipe whatever was there
+            # 2) focus the filter field
             self._click_point(d.filter_point, "filter field")
             if not self._wait(200):
                 return
-            self._backspaces(d.clear_backspaces)
+            if stale_box or d.dry_run:
+                self._clear_field()
+                stale_box = False
 
-            # 3) type the keyword and let the list settle
+            # 3) read the box while it is still empty, then type the keyword
+            empty_box = self._probe_filter()
             self._type(keyword)
             self.log.emit(f'filtering "{keyword}"', "info")
             if not self._wait(d.after_type_wait_ms):
                 return
 
-            # 4) Drop All — with the filter on, only what is listed falls
+            # 4) the keyword has to be visibly in the box before anything is
+            #    dropped. An unfocused field, a swallowed burst of keys, a
+            #    stutter in the stream — any of them leaves the box empty, and
+            #    Drop All on an unfiltered inventory empties the whole bag. That
+            #    is the one failure of this routine nobody can walk back, so it
+            #    is checked instead of waited out.
+            took = self._filter_took(empty_box)
+            if took is False and d.verify_filter:
+                stale_box = True
+                self.log.emit(
+                    f'"{keyword}" never reached the search field — Drop All '
+                    "skipped, the bag keeps this one. Check that ARK is in "
+                    "front and that the filter point sits on the search box",
+                    "err")
+                continue
+            if took is False:
+                self.log.emit(f'the search box still looks empty after typing '
+                              f'"{keyword}" — dropping anyway, the check is '
+                              "off", "warn")
+            elif took is None and not unreadable_logged:
+                unreadable_logged = True
+                self.log.emit("the search box cannot be read — Drop All goes "
+                              "out unverified this pass", "warn")
+
+            # 5) Drop All — with the filter on, only what is listed falls
             if d.dry_run:
                 self.shot_requested.emit(keyword)
                 self.log.emit(f'dry run: captured "{keyword}", Drop All not '
@@ -282,16 +385,20 @@ class MacroEngine(QThread):
                     return
             else:
                 self._click_point(d.dropall_point, "Drop All")
+                dropped += 1
                 if not self._wait(d.after_drop_wait_ms):
                     return
 
-        # 5) clear the filter so the inventory is not left masked
-        self._click_point(d.filter_point, "filter field")
-        if not self._wait(200):
-            return
-        self._backspaces(d.clear_backspaces)
+        # 6) a dry run never clicked Drop All, and neither did a skipped
+        #    template, so nothing cleared the filter — leaving the inventory
+        #    masked behind the last keyword
+        if d.dry_run or stale_box:
+            self._click_point(d.filter_point, "filter field")
+            if not self._wait(200):
+                return
+            self._clear_field()
 
-        # 6) close the inventory. Typing in the filter leaves the search field
+        # 7) close the inventory. Typing in the filter leaves the search field
         #    holding the keyboard, so the first press only steps out of it and
         #    the panel is still up. How many it takes is not something to
         #    guess: read the panel now, while it is certainly open, and press
@@ -306,6 +413,14 @@ class MacroEngine(QThread):
         if not self._wait(d.close_wait_ms):
             return
 
+        # a pass where every drop was skipped is not a pass done: the weight is
+        # still climbing, and the counter on the dashboard must not say otherwise
+        if not dropped and not d.dry_run:
+            self.log.emit("--- drop pass dropped nothing: the keyword never "
+                          "reached the search field. Bring ARK to the front, or "
+                          "recapture the filter point ---", "err")
+            return
+
         self.drops += 1
         self.stats_changed.emit(self.clicks, self.drops)
         self.log.emit("--- drop pass done, back to farming ---", "ok")
@@ -317,6 +432,19 @@ class MacroEngine(QThread):
         self.drops = 0
         self._drop_requested = False
         cfg = self.cfg
+
+        # Posted messages cannot reach a streamed session: the GeForce NOW
+        # client grabs real input and forwards it over the network, and a
+        # WM_KEYDOWN handed to its window is not real input. Nothing would
+        # arrive in game and every wait would still be paid, so say so and stop
+        # instead of farming into the void.
+        if cfg.target.mode == "background" and cfg.target.platform == "geforce_now":
+            self.log.emit("background delivery cannot reach a GeForce NOW "
+                          "session — the client only forwards real input. "
+                          "Switch Delivery mode to foreground", "err")
+            self.state_changed.emit("idle")
+            self._running = False
+            return
 
         if not self._resolve_window():
             title = cfg.target.window_title

@@ -99,6 +99,7 @@ The dangerous consequence: a short keyword also catches your gear.
 | Keyword | Also lists | Risk |
 |---|---|---|
 | `stone` | Stone Pick, Stone Hatchet | **high** — drops your tools |
+| `metal` | Metal Pick, Metal Hatchet, metal armor and structures, Metal Ingot | **high** — and no substring catches the ore alone |
 | `wood` | Wooden Club, wooden structures | **high** |
 | `hide` | Hide Shirt, Hide Pants (armor) | **high** |
 | `berry` | Mejoberry, Narcoberry | **high** — loses kibble and narcotics |
@@ -107,7 +108,9 @@ The dangerous consequence: a short keyword also catches your gear.
 
 Ways around it:
 
-- Farming stone or metal? Carry **metal tools** — then `stone` is safe.
+- Farming stone? Carry **metal tools** — then `stone` is safe. The reverse does
+  not work: `metal` matches the metal tools you just switched to, so empty the
+  bag of metal gear before arming that one.
 - Want only the dye berries? Use `amarberry`, `azulberry` and `tintoberry`
   instead of `berry`, so Mejoberry and Narcoberry stay in your bag.
 - **Do a dry run first.**
@@ -141,12 +144,49 @@ Fired on a click count (**14 clicks and at least 20 s of farming** by default),
 on a timer, or by `F7`:
 
 1. pause the autoclick and press the inventory key (`I` by default);
-2. click the filter field and wipe the previous text with backspaces;
+2. click the filter field;
 3. type the template's keyword;
-4. click **Drop All**;
-5. repeat for every checked template, in list order;
-6. clear the filter, press **`Esc` twice** to close the inventory, resume
-   farming.
+4. **read the search box** — no keyword visibly in there, no drop;
+5. click **Drop All**;
+6. repeat for every checked template, in list order;
+7. press **`Esc` twice** to close the inventory and resume farming. Nothing
+   clears the filter by hand: ARK empties the search box itself when Drop All
+   fires.
+
+## The one failure that costs the whole bag
+
+Steps 3 and 5 used to be joined by nothing but a half-second wait, and that is a
+hope, not a check. If the click missed the search field, or the window lost
+focus for a frame, or the stream swallowed the burst of keys, the box stays
+**empty** — and **Drop All with no filter empties the entire inventory**, tools
+and all. It is the one failure of this routine that cannot be walked back.
+
+So the box is read instead of trusted. Right after the field is focused, while
+it is certainly empty, the macro samples a band of pixels across it; after
+typing it samples them again. Glyphs move pixels, so the two readings **have**
+to differ:
+
+```
+23:15:44 filtering "flint"
+23:15:45 clicked Drop All at (1400, 900)
+23:15:47 filtering "thatch"
+23:15:48 "thatch" never reached the search field — Drop All skipped, the bag keeps this one
+```
+
+The mouse sits on the filter point for both readings, so whatever the cursor
+covers is covered identically in both and simply carries no information — which
+is why the measure is *how many* samples moved, never *all* of them.
+
+What it does **not** do is read *which* text is in there: `met` and `metal` both
+look like "not empty". A keyword that got in halfway still passes, and ARK's
+filter is a "contains" match, so the two rules on the Templates tab still hold —
+long, unambiguous keywords, and nothing in the bag you cannot afford to lose.
+
+The switch is **Templates → Before every Drop All**. Turning it off does not
+skip the check, it only stops it from blocking: the drop goes out anyway and the
+log says the box looked empty, which is the honest way to measure how often it
+trips on your connection. It needs a readable screen — borderless or windowed,
+foreground delivery — and says so in the log when it cannot see.
 
 Two presses, not one, and that is the whole trick: typing in the filter leaves
 the **search field holding the keyboard**, so the first `Esc` only steps out of
@@ -203,9 +243,8 @@ later. Switching the profile does three things:
   anchored to the picture, so with black bars an estimate based on the window
   would land half a bar off.
 
-**Recapture your points after switching** — and note that background delivery
-cannot work through the stream at all: the client captures real input, and
-posted messages never reach it. The app says so if you pick it anyway.
+**Recapture your points after switching.** Background delivery is **greyed out**
+on this profile — see below.
 
 ## Anti-AFK
 
@@ -227,11 +266,38 @@ dropped for inactivity.
 | Mode | How it sends | Notes |
 |------|--------------|-------|
 | **Foreground** (default) | `SendInput` with scancodes | Input indistinguishable from a real keyboard and mouse. Always works, but ARK has to be in front. The macro pauses by itself when you switch away and resumes when you come back. |
-| **Background** | `PostMessage` to the HWND | Lets you use the PC while farming, **but** Unreal normally reads Raw Input and ignores these messages. Test before trusting it: if nothing happens in game, go back to foreground. |
+| **Background** | `PostMessage` to the HWND | Lets you use the PC while farming, **but** Unreal normally reads Raw Input and ignores these messages. Test before trusting it: if nothing happens in game, go back to foreground. Not available on GeForce NOW. |
 
 There is no reliable way to click into a UE5 game in the background without
-injecting into the process, which is what anticheat looks for. The realistic
-path to "farm while I use the PC" is a second machine or a VM.
+injecting into the process, which is what anticheat looks for.
+
+### Why background is impossible on GeForce NOW
+
+Not "unreliable" — impossible, and no setting brings it back. The client is not
+the game: it **captures real input** from whatever has focus and forwards it
+over the network. A `PostMessage` is not real input; it is a message handed to
+the client's own window, where it stops. Nothing crosses to the server, and the
+macro would pay every wait in the cycle to send precisely nothing. So the entry
+is greyed out on that profile, and a hand-edited `config.json` that asks for it
+refuses to arm with an error in the log instead of farming into the void.
+
+What actually gets you "farm while I use the PC", in order of how well it works:
+
+1. **A second machine.** Any old laptop, or a phone or tablet running the GeForce
+   NOW app — the session is yours wherever it runs. Nothing to configure and
+   nothing to defeat. This is the real answer.
+2. **A Windows VM** (Hyper-V, VMware, VirtualBox) with the GeForce NOW client
+   *and* this app installed **inside the guest**. The guest has its own focus and
+   its own desktop, so the macro is foreground in there while you use the host
+   normally. Caveats worth knowing before you spend an evening on it: the client
+   may refuse to stream or fall back to a low bitrate under virtualization, and
+   the VM needs enough GPU passthrough to decode the video.
+3. **A second Windows user session** over RDP, same idea without the VM — but
+   connecting to the console session locks your desktop, and disconnecting the
+   RDP session pauses the desktop inside it. Fiddly; the VM is the better shape.
+
+None of these is a shortcut through the client. The stream carries real input or
+nothing, and that is the whole reason foreground works and background does not.
 
 ## Settings that usually matter
 
@@ -246,7 +312,8 @@ path to "farm while I use the PC" is a second machine or a VM.
   the macro checks the panel and presses until it is gone.
 - **Wait after closing**: two seconds by default, the pause before farming
   resumes. Raise it if the panel is still fading when the first swing goes out.
-- **Backspaces to clear**: must be longer than your longest keyword.
+- **Only drop when the keyword reached the search box**: leave it on. It is the
+  only thing standing between a swallowed keystroke and an empty inventory.
 - **Unicode typing**: only if the search field ignores the letters.
 - **Window title**: the fragment is matched against every open window, so keep
   it specific. A folder named `ark-something` open in Explorer matches `ARK`
