@@ -43,6 +43,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 STATE_DIR = ROOT / "state"
 CAPTURE_DIR = ROOT / "captures"
 
+# how often unattended updating looks for a new commit. Long on purpose: this
+# fires a git fetch, and a farming session lasts hours, not seconds.
+AUTO_CHECK_MIN = 20
+
 
 def spin(minimum, maximum, value, suffix="", step=1) -> QSpinBox:
     box = QSpinBox()
@@ -169,6 +173,17 @@ class MainWindow(QWidget):
         self._afk_timer = QTimer(self)
         self._afk_timer.timeout.connect(self._afk_tick)
 
+        # unattended updates: a check on a long timer, and a pull that waits for
+        # the macro to be idle before it restarts the app
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(lambda: self._check_updates(silent=True))
+        self._update_pending = False
+        # so the "waiting for…" line is logged once, not on every check
+        self._update_held = False
+        # a pull that failed once will fail the same way every 20 minutes, so
+        # unattended updating stands down for the session instead of looping
+        self._auto_blocked = False
+
         self.hotkeys = HotkeyManager()
         self.hotkeys.triggered.connect(self._on_hotkey)
         self.hotkeys.failed.connect(
@@ -184,7 +199,8 @@ class MainWindow(QWidget):
         self.titlebar.update_pill.clicked.connect(self._open_settings)
         self._log("ready. set the two points on the Points tab before the "
                   "first run.", "info")
-        if self.cfg.app.check_updates_on_start:
+        self._sync_auto_update()
+        if self.cfg.app.check_updates_on_start or self.cfg.app.auto_update:
             QTimer.singleShot(1200, lambda: self._check_updates(silent=True))
 
     def _open_settings(self) -> None:
@@ -740,6 +756,18 @@ class MainWindow(QWidget):
         self.sw_updates = SwitchRow("Check when the app starts",
                                     self.cfg.app.check_updates_on_start)
         card.add(self.sw_updates)
+        self.sw_auto_update = SwitchRow("Update on its own, no button",
+                                        self.cfg.app.auto_update)
+        card.add(self.sw_auto_update)
+        card.add(hint_label(
+            f"Checks every {AUTO_CHECK_MIN} minutes as well as at start, and "
+            "pulls without asking. A new commit reaches this app with nothing "
+            "for you to click — and nothing to review either, so whatever is "
+            "pushed is what you farm with. It never restarts mid-farm or under "
+            "the point picker: an update that lands then is held until you are "
+            "done. It stands aside for a folder with uncommitted changes, and "
+            "for a commit that changes requirements.txt — restarting into "
+            "dependencies you have not installed would not come back up."))
         return card
 
     def _page_log(self) -> QWidget:
@@ -905,7 +933,8 @@ class MainWindow(QWidget):
             self.sp_dx, self.sp_dy, self.cb_mode, self.ed_window,
             self.sw_focus.switch, self.sp_delay, self.chk_unicode,
             self.hk_toggle, self.hk_drop, self.hk_panic, self.hk_pick,
-            self.sw_dry.switch, self.sw_updates.switch, self.cb_platform,
+            self.sw_dry.switch, self.sw_updates.switch,
+            self.sw_auto_update.switch, self.cb_platform,
             self.sp_latency, self.sw_afk.switch, self.sp_afk_interval,
             self.ed_afk_key,
         ]
@@ -979,6 +1008,8 @@ class MainWindow(QWidget):
         keys.panic = self.hk_panic.text() or keys.panic
         keys.pick_points = self.hk_pick.text() or keys.pick_points
         self.cfg.app.check_updates_on_start = self.sw_updates.switch.isChecked()
+        self.cfg.app.auto_update = self.sw_auto_update.switch.isChecked()
+        self._sync_auto_update()
         self._refresh_hotkey_chips()
         self._refresh_points_status()
 
@@ -1040,6 +1071,9 @@ class MainWindow(QWidget):
     def _on_finished(self) -> None:
         self._set_start_button(running=False)
         self._time_timer.stop()
+        if self._update_pending:
+            # the farm is over, so the restart is free now
+            QTimer.singleShot(400, self._auto_apply)
 
     def _drop_now(self) -> None:
         if self.engine and self.engine.isRunning():
@@ -1055,6 +1089,14 @@ class MainWindow(QWidget):
     def _on_state(self, state: str) -> None:
         self._state = state
         self.titlebar.status.set_state(state)
+
+    # --------------------------------------------------------- auto updating
+    def _sync_auto_update(self) -> None:
+        if self.cfg.app.auto_update:
+            self._auto_timer.start(AUTO_CHECK_MIN * 60 * 1000)
+        else:
+            self._auto_timer.stop()
+            self._update_pending = False
 
     # -------------------------------------------------------------- anti-afk
     def _sync_afk(self) -> None:
@@ -1414,6 +1456,46 @@ class MainWindow(QWidget):
                 "uncommitted changes — commit or discard them first")
         self._log(f"{status.behind} new {plural} available", "warn")
 
+        if not self.cfg.app.auto_update or status.dirty:
+            return
+        if status.requirements_changed:
+            # pulling here would restart into an app whose dependencies are not
+            # installed yet, and it would not come back up. Better to stay on
+            # the old commit, running, and let the button drive this one.
+            self._log("update needs new dependencies — not pulling on its own. "
+                      "Use Update and restart, then run the pip install", "err")
+            return
+        self._auto_apply()
+
+    def _auto_apply(self) -> None:
+        """
+        Pull without being asked — but never on top of a running macro.
+
+        Restarting mid-pass would leave the inventory open and the session
+        farming nothing, so the update waits for the macro to stop. `_on_finished`
+        picks the pending flag back up. A restart under the point picker would
+        take the frozen screen with it, so that waits too — for the next check,
+        since picking ends without an engine signal.
+        """
+        if self._auto_blocked:
+            return
+        busy = ""
+        if self.engine and self.engine.isRunning():
+            busy = "the macro to stop"
+            self._update_pending = True
+        elif self._picking:
+            busy = "the point picker to close"
+        if busy:
+            if not self._update_held:
+                self._update_held = True
+                self._log(f"update waiting for {busy} before it restarts the "
+                          "app", "warn")
+            return
+        self._update_held = False
+        self._update_pending = False
+        self._log("updating on its own", "warn")
+        self._apply_update()
+
     def _apply_update(self) -> None:
         if self._update_worker is not None:
             return
@@ -1434,6 +1516,12 @@ class MainWindow(QWidget):
             self.btn_apply.setEnabled(True)
             self.lbl_update.setText(f"update failed: {message}")
             self._log(f"update failed: {message}", "err")
+            if self.cfg.app.auto_update and not self._auto_blocked:
+                self._auto_blocked = True
+                self._log("updating on its own is paused for this session — "
+                          "the same pull would fail again every "
+                          f"{AUTO_CHECK_MIN} minutes. Use the button once the "
+                          "reason above is fixed", "warn")
             return
         self.lbl_update.setText(f"{message} — restarting…")
         self._log(f"{message} — restarting", "ok")
@@ -1487,6 +1575,9 @@ class MainWindow(QWidget):
     # --------------------------------------------------------------- close
     def closeEvent(self, event) -> None:
         self._afk_timer.stop()
+        self._auto_timer.stop()
+        # the macro stopping here must not kick off a pull on the way out
+        self._update_pending = False
         self._stop_macro()
         if self._update_worker is not None:
             self._update_worker.wait(3000)

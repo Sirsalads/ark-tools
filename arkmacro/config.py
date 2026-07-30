@@ -95,6 +95,14 @@ class AntiAfk:
 @dataclass
 class App:
     check_updates_on_start: bool = True
+    # pull and restart without being asked, so a new commit reaches the running
+    # app on its own. Held back while the macro is farming — a restart mid-pass
+    # would drop the session on the floor.
+    #
+    # On by default, which is a real choice: it means whatever is pushed is what
+    # you farm with, with no review step. The alternative was a switch nobody
+    # can reach without first applying an update by hand.
+    auto_update: bool = True
 
 
 @dataclass

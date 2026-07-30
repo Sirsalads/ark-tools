@@ -10,6 +10,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -259,6 +260,11 @@ assert win.windowTitle() == APP_NAME
 print("OK  window carries the A.N.S Tools name")
 
 # ------------------------------------------------- 13) update card states
+# unattended updating is on by default and would run a real `git pull` on the
+# checkout these tests are running from. 13b turns it back on with the pull
+# stubbed; here it stays off.
+win.sw_auto_update.switch.setChecked(False)
+win._pull()
 win.stack.setCurrentIndex(4)
 app.processEvents()
 assert not win.btn_apply.isVisible(), "update button shows before any check"
@@ -288,6 +294,89 @@ win._on_update_checked(updater.Status(ok=False, error="could not reach origin"))
 assert not win.btn_apply.isVisible()
 assert "could not reach origin" in win.lbl_update.text()
 print("OK  update card reflects every check outcome")
+
+# ------------------------------------------- 13b) unattended updating
+# The pull itself is stubbed: this is about *when* the app decides to pull, and
+# a real `git pull` in a test would rewrite the checkout it is running from.
+applies: list[int] = []
+win._apply_update = lambda: applies.append(1)
+new_commit = updater.Status(ok=True, behind=1, commits=[("abc1234", "fix")])
+
+
+class Farming:
+    """Stands in for a running engine."""
+
+    @staticmethod
+    def isRunning():
+        return True
+
+
+# switched off: a new commit waits for the button
+win.sw_auto_update.switch.setChecked(False)
+win._pull()
+win._on_update_checked(new_commit)
+assert not applies, "pulled without being asked while the switch was off"
+
+# and it ships on, so a fresh config updates itself with nothing to click
+assert Config().app.auto_update is True, "unattended updating no longer default"
+
+# on, and nothing farming: it goes straight through
+win.sw_auto_update.switch.setChecked(True)
+win._pull()
+win.engine = None
+win._on_update_checked(new_commit)
+assert applies == [1], f"unattended update did not fire: {applies}"
+
+# on, but the macro is farming: held, not applied — a restart mid-pass would
+# leave the inventory open and the session farming nothing
+applies.clear()
+win.engine = Farming()
+win._on_update_checked(new_commit)
+assert not applies, "restarted the app in the middle of a farm"
+assert win._update_pending, "the update was dropped instead of held"
+
+# the point picker is just as fatal to restart under
+win.engine = None
+win._picking = True
+win._on_update_checked(new_commit)
+assert not applies, "restarted the app under the frozen picker"
+win._picking = False
+
+# and it lands as soon as the macro stops
+win.engine = None
+win._on_finished()
+for _ in range(40):                     # the pending apply is on a short timer
+    app.processEvents()
+    if applies:
+        break
+    time.sleep(0.02)
+assert applies == [1], f"the held update never landed: {applies}"
+
+# a dirty checkout is skipped entirely — apply() would refuse anyway
+applies.clear()
+win._on_update_checked(updater.Status(ok=True, behind=1, dirty=True,
+                                      commits=[("abc1234", "wip")]))
+assert not applies, "tried to pull onto uncommitted changes"
+
+# and so is a commit that needs new dependencies: restarting into a missing
+# PySide6 would take the app down and not bring it back
+win._on_update_checked(updater.Status(ok=True, behind=1,
+                                      requirements_changed=True,
+                                      commits=[("abc1234", "bump deps")]))
+assert not applies, "auto-pulled a commit that changes requirements.txt"
+
+# a failed pull stands down for the session instead of retrying every 20 min
+win._on_update_applied(False, "boom")
+assert win._auto_blocked
+applies.clear()
+win._on_update_checked(new_commit)
+assert not applies, "kept retrying a pull that already failed"
+
+win._auto_blocked = False
+win.sw_auto_update.switch.setChecked(False)
+win._pull()
+del win._apply_update
+print("OK  unattended updating waits for an idle macro and gives up on failure")
 
 # ------------------------------------------------- 14) stale preview guard
 win.stack.setCurrentIndex(3)

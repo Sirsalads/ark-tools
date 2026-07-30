@@ -73,6 +73,27 @@ whatever we push here lands on your machine with one click.
 - Rolling back is plain git: `git reset --hard <sha>`, or `git reflog` to find
   where you were.
 
+### Zero clicks: Update on its own
+
+Same card, second switch. With it on the app checks at startup **and every 20
+minutes**, then pulls and restarts without asking — a commit pushed here reaches
+the running app with nothing for you to do.
+
+What that buys and what it costs, plainly:
+
+- There is **no review gate**. Whatever is pushed is what you farm with, on the
+  next check. That is the point of the switch, and the whole risk of it.
+- It **never restarts mid-farm.** An update that lands while the macro is
+  running is held, with a line in the log, and applied the moment you stop.
+- A **dirty checkout is skipped** entirely — the pull would refuse anyway.
+- A pull that **fails** (a diverged branch, no network) stands down for the rest
+  of the session instead of retrying every 20 minutes. Fix the reason and use
+  the button once; the next start re-arms it.
+- The clone follows **whatever branch it is on**. On `main` it tracks `main`;
+  check out a feature branch and it tracks that instead. Worth knowing if the
+  card ever says "you are on the latest commit" while you expect something new
+  — check which branch the card names.
+
 ## Templates
 
 The drop cycle is built from **checkable templates** — a friendly name plus the
