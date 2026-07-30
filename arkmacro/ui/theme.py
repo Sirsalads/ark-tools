@@ -84,48 +84,68 @@ QDialog {{ background: {INK}; }}
     border-bottom-left-radius: 14px;
 }}
 #navSection {{
-    color: {MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    color: {MUTED}; font-size: 9.5px; font-weight: 700; letter-spacing: 1.7px;
     padding: 0px 14px;
 }}
 #navbtn {{
-    background: transparent; border: none; border-radius: 9px;
-    padding: 9px 12px; text-align: left; color: {TEXT_DIM}; font-size: 13px;
+    background: transparent; border: none; border-radius: 10px;
+    border-left: 2px solid transparent;
+    padding: 10px 12px; text-align: left; color: {TEXT_DIM}; font-size: 13px;
 }}
 #navbtn:hover {{ background: {GLASS}; color: {TEXT}; }}
 #navbtn:checked {{
-    background: rgba(64, 220, 240, 0.14);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 rgba(64, 220, 240, 0.20),
+                                stop:1 rgba(64, 220, 240, 0.05));
+    border-left: 2px solid {ACCENT};
     color: {ACCENT};
-    font-weight: 600;
+    font-weight: 650;
 }}
 #footNote {{ color: {MUTED}; font-size: 11px; padding: 0px 14px; }}
 
 /* ----------------------------------------------------------------- cards */
 #card {{
-    background: {GLASS};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(20, 42, 53, 0.78),
+                                stop:1 rgba(11, 26, 34, 0.74));
     border: 1px solid {GLASS_LINE_SOFT};
-    border-radius: 12px;
+    border-radius: 14px;
 }}
 #cardAccent {{
-    background: {GLASS};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 rgba(26, 58, 71, 0.86),
+                                stop:1 rgba(12, 29, 38, 0.78));
     border: 1px solid {GLASS_LINE};
-    border-radius: 12px;
+    border-radius: 14px;
 }}
 #cardTitle {{
     font-family: {DISPLAY_FONT};
-    font-size: 13px; font-weight: 600; letter-spacing: 0.2px;
+    font-size: 14px; font-weight: 650; letter-spacing: 0.1px;
 }}
-#cardSub, #hint {{ font-size: 11px; color: {MUTED}; }}
-#warnHint {{ font-size: 11px; color: {WARN}; }}
+#iconTile {{
+    background: rgba(64, 220, 240, 0.10);
+    border: 1px solid {GLASS_LINE_SOFT};
+    border-radius: 10px;
+}}
+#cardSub, #hint {{ font-size: 11.5px; color: {MUTED}; line-height: 150%; }}
+#warnHint {{ font-size: 11.5px; color: {WARN}; }}
 #pageTitle {{
     font-family: {DISPLAY_FONT};
-    font-size: 22px; font-weight: 600; letter-spacing: -0.2px;
+    font-size: 25px; font-weight: 650; letter-spacing: -0.4px;
 }}
-#pageSub {{ font-size: 12px; color: {MUTED}; }}
+#pageSub {{ font-size: 12.5px; color: {MUTED}; }}
+#pageKicker {{
+    color: {ACCENT}; font-size: 10px; font-weight: 700; letter-spacing: 1.8px;
+}}
 #fieldLabel {{ color: {TEXT_DIM}; font-size: 12px; }}
+#keyTitle {{ color: {TEXT}; font-size: 12.5px; font-weight: 600; }}
 #divider {{ background: {GLASS_LINE_SOFT}; }}
 #stepNum {{
     color: {ACCENT}; font-size: 11px; font-weight: 700;
     background: rgba(64, 220, 240, 0.12); border-radius: 9px;
+}}
+#groupLabel {{
+    color: {MUTED}; font-size: 10px; font-weight: 700; letter-spacing: 1.4px;
 }}
 
 /* ---------------------------------------------------------------- inputs */

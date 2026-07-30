@@ -87,29 +87,109 @@ class ToggleSwitch(QAbstractButton):
         painter.drawEllipse(QRectF(3 + self._pos * 21, 5, 14, 14))
 
 
+class IconTile(QLabel):
+    """A glyph on a soft accent square, for card headers."""
+
+    def __init__(self, name: str, accent: str = "",
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("iconTile")
+        self.setFixedSize(34, 34)
+        self.setAlignment(Qt.AlignCenter)
+        self.setPixmap(icons.pixmap(name, accent or T.ACCENT, 17))
+
+
+class KeyCap(QLabel):
+    """
+    One key drawn as a keycap.
+
+    A hotkey written into a sentence disappears into it. Drawn as the thing you
+    are meant to press, it is findable at a glance — which is the whole job of
+    the key list on the dashboard.
+    """
+
+    def __init__(self, text: str, tone: str = "",
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("keycap")
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumWidth(46)
+        self.setFixedHeight(28)
+        self._tone = tone or T.ACCENT
+        self.set_key(text)
+
+    def set_key(self, text: str) -> None:
+        self.setText(text.upper() or "—")
+        self.setStyleSheet(
+            f"color:{self._tone};"
+            f"background:{T.FIELD};"
+            f"border:1px solid {T.BORDER};"
+            "border-bottom-width:2px;"
+            "border-radius:7px; padding:0 9px;"
+            'font-family:"Cascadia Mono","Consolas",monospace;'
+            "font-size:12px; font-weight:700; letter-spacing:0.5px;"
+        )
+
+
+class KeyRow(QWidget):
+    """A keycap, what it does, and one line on when it applies."""
+
+    def __init__(self, key: str, title: str, detail: str = "", tone: str = "",
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(13)
+        self.cap = KeyCap(key, tone)
+        row.addWidget(self.cap, 0, Qt.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("keyTitle")
+        text.addWidget(self.title_label)
+        if detail:
+            self.detail_label = hint_label(detail)
+            text.addWidget(self.detail_label)
+        else:
+            self.detail_label = None
+        row.addLayout(text, 1)
+
+
 class Card(QFrame):
-    """Panel with a title, optional subtitle and a content area."""
+    """
+    Panel with a title, optional subtitle and a content area.
+
+    An `icon` puts a tinted glyph in a rounded tile beside the title. It is not
+    decoration: with several cards down a long page, the glyph is what the eye
+    finds before it reads anything.
+    """
 
     def __init__(self, title: str = "", subtitle: str = "",
-                 accent: bool = False, parent: QWidget | None = None) -> None:
+                 accent: bool = False, icon: str = "",
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("cardAccent" if accent else "card")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(18, 15, 18, 17)
-        outer.setSpacing(13)
+        outer.setContentsMargins(20, 17, 20, 19)
+        outer.setSpacing(14)
 
         if title:
-            head = QVBoxLayout()
-            head.setSpacing(3)
+            head = QHBoxLayout()
+            head.setSpacing(12)
+            if icon:
+                head.addWidget(IconTile(icon), 0, Qt.AlignTop)
+            text = QVBoxLayout()
+            text.setSpacing(3)
             label = QLabel(title)
             label.setObjectName("cardTitle")
-            head.addWidget(label)
+            text.addWidget(label)
             if subtitle:
-                head.addWidget(hint_label(subtitle))
+                text.addWidget(hint_label(subtitle))
+            head.addLayout(text, 1)
             outer.addLayout(head)
 
         self.body = QVBoxLayout()
-        self.body.setSpacing(11)
+        self.body.setSpacing(12)
         outer.addLayout(self.body)
 
     def add(self, item) -> "Card":

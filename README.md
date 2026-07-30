@@ -34,7 +34,7 @@ The routine only needs two clicks, but they depend on your resolution and on
 what the HUD is showing. Instead of a countdown, the macro **freezes the
 screen** and lets you pick them with a magnifier:
 
-![Point picker](docs/picker.png)
+![Picking the points on a frozen screen](docs/picker.png)
 
 1. Open the inventory in ARK — *exactly* the state the macro will use
    (inventory alone with `I`, or with a storage box open; the icon row sits in
@@ -94,12 +94,17 @@ What that buys and what it costs, plainly:
   card ever says "you are on the latest commit" while you expect something new
   — check which branch the card names.
 
-## Templates
+## The Farm page
+
+One macro, one page. Swinging, when it stops to empty the bag, what to drop, the
+two points it clicks, and the feeding that keeps you alive while it runs — all in
+the order you would set them up. It used to be three separate tabs, which meant
+configuring one macro by walking a menu.
 
 The drop cycle is built from **checkable templates** — a friendly name plus the
 keyword that gets typed into the filter:
 
-![Templates](docs/templates.png)
+![The Farm page](docs/templates.png)
 
 - **Add** creates one from the two fields; **Save** applies edits to the
   selected row.
@@ -157,7 +162,13 @@ listing your pick before letting the macro loose.
 | `F8` | emergency stop |
 | `F9` | freeze the screen and pick the points |
 
-All rebindable on the **Settings** tab.
+All rebindable on the **Settings** page, and all listed on the **Dashboard** —
+including the two that belong to the Drop and Overcap skin macros, which the
+dashboard also names so "what does F3 do" never needs a hunt.
+
+The four above are the app's own: they are registered as global hotkeys, so they
+fire anywhere and **ARK never sees them**. The two macro keys are the opposite —
+they are only watched, never swallowed, because the game has to receive them.
 
 ## One drop pass, step by step
 
@@ -200,10 +211,10 @@ is why the measure is *how many* samples moved, never *all* of them.
 
 What it does **not** do is read *which* text is in there: `met` and `metal` both
 look like "not empty". A keyword that got in halfway still passes, and ARK's
-filter is a "contains" match, so the two rules on the Templates tab still hold —
+filter is a "contains" match, so the two rules on the Farm page still hold —
 long, unambiguous keywords, and nothing in the bag you cannot afford to lose.
 
-The switch is **Templates → Before every Drop All**. Turning it off does not
+The switch is **Farm → Before every Drop All**. Turning it off does not
 skip the check, it only stops it from blocking: the drop goes out anyway and the
 log says the box looked empty, which is the honest way to measure how often it
 trips on your connection. It needs a readable screen — borderless or windowed,
@@ -231,7 +242,7 @@ then presses and re-reads until those pixels change:
 
 If four presses go by with the panel still there, it tries the other key once
 (the inventory key when you close with `Esc`, and the reverse) and says so in
-the log. **Presses to close** (1–5, under *Templates → Inventory and timings*)
+the log. **Presses to close** (1–5, under *Farm → Inventory and timings*)
 is the fallback for when the screen cannot be read — background delivery, or
 exclusive fullscreen. One more reason to run **borderless or windowed**.
 
@@ -244,8 +255,8 @@ that swing lands in the inventory and the whole thing starts over.
 The click trigger counts clicks, and clicks are free: a dino with its own
 attack cooldown eats fourteen of them in two seconds and lands three hits.
 So the pass waits for **both** conditions — the click count **and** a minimum
-stretch of farming, 20 s by default (**Templates → When it runs → Farm for at
-least**). Raise it for a slow attack animation, drop it to zero to go back to
+stretch of farming, 20 s by default (**Farm → When it empties the bag →
+Farm for at least**). Raise it for a slow attack animation, drop it to zero to go back to
 counting clicks alone.
 
 ## GeForce NOW
@@ -267,9 +278,9 @@ later. Switching the profile does three things:
 **Recapture your points after switching.** Background delivery is **greyed out**
 on this profile — see below.
 
-## Hold-to-drop
+## Drop
 
-**Points → Hold-to-drop.** Nothing to do with the farm loop. Point ARK's drop key
+**Drop.** Nothing to do with the farm loop. Point ARK's drop key
 at a block of slots and the cursor sweeps them, dropping every stack it passes —
 for emptying a forge or a bag by hand, fast. Hold the key, or press once to start
 and once to stop.
@@ -346,9 +357,9 @@ would drop those too.
 The cursor goes back where it was when you release the key, and the area is
 rescaled if your screen resolution changes — verify it after, same as the points.
 
-## Skin overcap
+## Overcap skin
 
-**Points → Skin overcap.** Press your key and the macro holds **Shift + a hotbar
+**Overcap skin.** Press your key and the macro holds **Shift + a hotbar
 slot** for you while the cursor runs the strip you selected end to end and back,
 in a loop. Your hands stay free.
 
@@ -395,7 +406,7 @@ matter beyond that.
   advice: lower it on an installed game, raise it on GeForce NOW.
 - It stops the moment ARK stops being the front window, whichever mode it is in.
 
-**Hold-to-drop and skin overcap never run at the same time.** There is one
+**Drop and Overcap skin never run at the same time.** There is one
 cursor, so whichever one is already sweeping keeps it until it stops.
 
 Both have the same split for the same reason: **the key you press to start a
@@ -406,7 +417,7 @@ start a macro that holds Shift + a slot is a circle with no way out.
 
 ## Auto-feed
 
-**Settings → Auto-feed.** Presses two hotbar slots on a timer so the character
+**Farm → Auto-feed.** Presses two hotbar slots on a timer so the character
 eats and drinks while the macro farms. Food on one slot, a full waterskin or
 canteen on the other; **every 6 minutes** by default, slots **4** and **5**.
 
@@ -519,6 +530,20 @@ nothing, and that is the whole reason foreground works and background does not.
   it specific. A folder named `ark-something` open in Explorer matches `ARK`
   too — the app prefers an exact title, then a prefix, then the largest window,
   and **Find the ARK window** tells you which one it picked.
+
+## How the app is laid out
+
+| Page | What lives there |
+|---|---|
+| **Dashboard** | Start/stop, the counters, and every key the app answers to |
+| **Farm** | The long-running macro: swinging, the drop trigger, the drop list, the safety check, the timings, the two points, and auto-feed |
+| **Drop** | Sweep a block of slots by hand |
+| **Overcap skin** | Run the hotbar strip with a held chord |
+| **Settings** | Global hotkeys, target and delivery, anti-AFK, updates |
+| **Log** | Everything the app did this session |
+
+The split is by **what you run**, not by what kind of setting it is. Setting up
+the farm macro used to mean walking Autoclick, then Templates, then Points.
 
 ## Layout
 

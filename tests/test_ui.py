@@ -24,7 +24,10 @@ from arkmacro import updater  # noqa: E402
 from arkmacro.config import Config  # noqa: E402
 from arkmacro.ui import icons  # noqa: E402
 from arkmacro.ui.backdrop import Backdrop, load_brand  # noqa: E402
-from arkmacro.ui.main_window import APP_NAME, MainWindow, NAV  # noqa: E402
+from arkmacro.ui.main_window import (APP_NAME, NAV, PAGE_DASHBOARD,  # noqa: E402
+                                     PAGE_DROP, PAGE_FARM, PAGE_LOG,
+                                     PAGE_OVERCAP, PAGE_SETTINGS,
+                                     MainWindow)
 from arkmacro.ui.picker import ScreenPicker  # noqa: E402
 from arkmacro.ui.theme import QSS  # noqa: E402
 from arkmacro.ui.widgets import FormGrid, PresetDialog, TemplateEditor  # noqa: E402
@@ -45,13 +48,53 @@ win.show()
 app.processEvents()
 
 # ------------------------------------------------- 1) every page builds
-for index, (_glyph, name) in enumerate(NAV):
+for index, (_glyph, name, _section) in enumerate(NAV):
     win.stack.setCurrentIndex(index)
     app.processEvents()
     page = win.stack.widget(index)
     assert page.widget().sizeHint().width() <= 1060, \
         f"page {name} is wider than the window and would clip"
 print(f"OK  {len(NAV)} pages build and fit")
+
+# ------------------------------------------- 1b) the nav is grouped by job
+# One page per thing you can run, not one page per settings panel: setting up
+# the farm macro used to mean walking three tabs.
+assert [name for _g, name, _s in NAV] == [
+    "Dashboard", "Farm", "Drop", "Overcap skin", "Settings", "Log"], NAV
+sections = [section for _g, _n, section in NAV if section]
+assert sections == ["CONTROL", "MACROS", "SYSTEM"], sections
+# every macro page owns its own controls, and Farm owns the ones that used to
+# be scattered across Autoclick, Templates and Points
+for widget, page in ((win.sp_cps_min, PAGE_FARM), (win.tpl_editor, PAGE_FARM),
+                     (win.sp_fx, PAGE_FARM), (win.sw_feed.switch, PAGE_FARM),
+                     (win.sw_hold.switch, PAGE_DROP),
+                     (win.sw_skin.switch, PAGE_OVERCAP),
+                     (win.sw_afk.switch, PAGE_SETTINGS)):
+    holder = win.stack.widget(page)
+    assert holder.isAncestorOf(widget), \
+        f"{widget.objectName() or widget} is not on the page it belongs to"
+print("OK  the nav groups pages by what they run, and each owns its controls")
+
+# ------------------------------------------- 1c) the dashboard key list
+# "What does F3 do" has to be answerable without opening a page.
+win.stack.setCurrentIndex(PAGE_DASHBOARD)
+win.cfg.hold_drop.mode = "toggle"
+win.cfg.hold_drop.activate_key = "f3"
+win.cfg.skin_overcap.activate_key = "f4"
+win._refresh_hotkey_chips()
+caps = {name: row.cap.text() for name, row in win.key_rows.items()}
+assert caps == {"toggle": "F6", "drop_now": "F7", "panic": "F8",
+                "pick_points": "F9", "hold": "F3", "skin": "F4"}, caps
+
+# in manual mode the drop key itself is what starts the sweep, so that is the
+# key the dashboard has to show
+win.cfg.hold_drop.mode = "manual"
+win.cfg.hold_drop.key = "o"
+win._refresh_hotkey_chips()
+assert win.key_rows["hold"].cap.text() == "O", win.key_rows["hold"].cap.text()
+win.cfg.hold_drop.mode = "toggle"
+win._refresh_hotkey_chips()
+print("OK  the dashboard names every key, including the two macro ones")
 
 # ------------------------------------------------- 2) template editor
 editor: TemplateEditor = win.tpl_editor
@@ -70,7 +113,7 @@ editor._add()
 assert len(editor.templates()) == before + 1, "duplicate keyword got in"
 
 # rename the selected row, keeping its checked state
-win.stack.setCurrentIndex(2)
+win.stack.setCurrentIndex(PAGE_FARM)
 editor.list.setCurrentRow(0)
 first_state = editor.templates()[0]["enabled"]
 editor.name_edit.setText("Renamed")
@@ -202,7 +245,8 @@ win.sp_dx.setValue(0)
 win.sp_dy.setValue(0)
 win._start_macro()
 assert win.engine is None, "macro started without the points being set"
-assert win.stack.currentIndex() == 3, "user was not sent to the Points tab"
+assert win.stack.currentIndex() == PAGE_FARM, \
+    "user was not sent to the page holding the points"
 print("OK  refuses to arm without points and jumps to the right tab")
 
 # ------------------------------------------------- 7) point estimate + thumbs
@@ -296,7 +340,7 @@ print("OK  window carries the A.N.S Tools name")
 # stubbed; here it stays off.
 win.sw_auto_update.switch.setChecked(False)
 win._pull()
-win.stack.setCurrentIndex(4)
+win.stack.setCurrentIndex(PAGE_SETTINGS)
 app.processEvents()
 assert not win.btn_apply.isVisible(), "update button shows before any check"
 assert not win.titlebar.update_pill.isVisible()
@@ -410,7 +454,7 @@ del win._apply_update
 print("OK  unattended updating waits for an idle macro and gives up on failure")
 
 # ------------------------------------------------- 14) stale preview guard
-win.stack.setCurrentIndex(3)
+win.stack.setCurrentIndex(PAGE_FARM)
 app.processEvents()
 shot2 = QPixmap(400, 300)
 shot2.fill(QColor("#204050"))
@@ -452,7 +496,7 @@ assert win.tile_clicks.value.text() == "1,284", win.tile_clicks.value.text()
 print("OK  numbers use the app's own locale")
 
 # ------------------------------------------------- 18) GeForce NOW profile
-win.stack.setCurrentIndex(4)
+win.stack.setCurrentIndex(PAGE_SETTINGS)
 win.ed_window.setText("ARK")
 win.sp_latency.setValue(0)
 win.cb_platform.setCurrentIndex(1)          # GeForce NOW
@@ -537,7 +581,7 @@ assert not win._afk_timer.isActive(), "disabling did not stop the timer"
 print("OK  anti-afk taps a dead key, and only when it is safe to")
 
 # ------------------------------------------------- 21) closing the inventory
-win.stack.setCurrentIndex(2)
+win.stack.setCurrentIndex(PAGE_FARM)
 win.cb_close.setCurrentIndex(1)             # Esc
 win.sp_close_presses.setValue(1)
 win.cb_close.setCurrentIndex(0)             # the inventory key only toggles
@@ -551,7 +595,7 @@ assert win.cfg.drop.close_with == "esc" and win.cfg.drop.close_presses == 2
 print("OK  the close press count follows the key that gets sent")
 
 # ------------------------------------------------- 22) hold-to-drop sweep
-win.stack.setCurrentIndex(3)
+win.stack.setCurrentIndex(PAGE_FARM)
 moves: list[tuple[int, int]] = []
 taps.clear()                                # `taps` records w.tap, from 20)
 held = {"down": False}

@@ -26,17 +26,24 @@ from . import icons
 from . import theme as T
 from .backdrop import Backdrop
 from .picker import AreaPicker, ScreenPicker
-from .widgets import (Card, Divider, FormGrid, HotkeyEdit, NavButton, PointThumb,
-                      StatTile, SwitchRow, TemplateEditor, TitleBar, hint_label)
+from .widgets import (Card, Divider, FormGrid, HotkeyEdit, KeyRow, NavButton,
+                      PointThumb, StatTile, SwitchRow, TemplateEditor, TitleBar,
+                      hint_label)
 
+# (icon, label, section header shown above it — blank to continue the group).
+# Grouped by what a page is *for*: the one you drive from, the three macros,
+# and the two that are neither.
 NAV = [
-    ("grid", "Dashboard"),
-    ("mouse", "Autoclick"),
-    ("list", "Templates"),
-    ("target", "Points"),
-    ("sliders", "Settings"),
-    ("terminal", "Log"),
+    ("gauge", "Dashboard", "CONTROL"),
+    ("pickaxe", "Farm", "MACROS"),
+    ("hand-drop", "Drop", ""),
+    ("layers", "Overcap skin", ""),
+    ("sliders", "Settings", "SYSTEM"),
+    ("terminal", "Log", ""),
 ]
+
+PAGE_DASHBOARD, PAGE_FARM, PAGE_DROP, PAGE_OVERCAP, PAGE_SETTINGS, PAGE_LOG = \
+    range(len(NAV))
 
 APP_NAME = "A.N.S Tools"
 
@@ -98,9 +105,14 @@ def scroll_page() -> tuple[QScrollArea, QVBoxLayout]:
     return area, lay
 
 
-def heading(title: str, subtitle: str) -> QVBoxLayout:
+def heading(title: str, subtitle: str, kicker: str = "") -> QVBoxLayout:
     box = QVBoxLayout()
     box.setSpacing(4)
+    if kicker:
+        eyebrow = QLabel(kicker)
+        eyebrow.setObjectName("pageKicker")
+        box.addWidget(eyebrow)
+        box.addSpacing(2)
     label = QLabel(title)
     label.setObjectName("pageTitle")
     sub = QLabel(subtitle)
@@ -110,6 +122,13 @@ def heading(title: str, subtitle: str) -> QVBoxLayout:
     box.addWidget(label)
     box.addWidget(sub)
     return box
+
+
+def group_label(text: str) -> QLabel:
+    """Small caps rule inside a card, for grouping rows that belong together."""
+    label = QLabel(text)
+    label.setObjectName("groupLabel")
+    return label
 
 
 def chip(text: str) -> QLabel:
@@ -238,8 +257,12 @@ class MainWindow(QWidget):
             QTimer.singleShot(1200, lambda: self._check_updates(silent=True))
 
     def _open_settings(self) -> None:
-        self.nav_group.button(4).setChecked(True)
-        self.stack.setCurrentIndex(4)
+        self._go(PAGE_SETTINGS)
+
+    def _go(self, index: int) -> None:
+        """Move the nav and the stack together — they are one thing to a user."""
+        self.nav_group.button(index).setChecked(True)
+        self.stack.setCurrentIndex(index)
 
     # -------------------------------------------------------------- layout
     def _build_ui(self) -> None:
@@ -272,9 +295,9 @@ class MainWindow(QWidget):
         body.addWidget(self.stack, 1)
 
         self.stack.addWidget(self._page_dashboard())
-        self.stack.addWidget(self._page_autoclick())
-        self.stack.addWidget(self._page_templates())
-        self.stack.addWidget(self._page_points())
+        self.stack.addWidget(self._page_farm())
+        self.stack.addWidget(self._page_drop())
+        self.stack.addWidget(self._page_overcap())
         self.stack.addWidget(self._page_settings())
         self.stack.addWidget(self._page_log())
 
@@ -290,24 +313,20 @@ class MainWindow(QWidget):
         lay.setContentsMargins(10, 18, 10, 16)
         lay.setSpacing(3)
 
-        section = QLabel("CONTROL")
-        section.setObjectName("navSection")
-        lay.addWidget(section)
-        lay.addSpacing(6)
-
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
-        for index, (glyph, name) in enumerate(NAV):
+        for index, (glyph, name, section) in enumerate(NAV):
+            if section:
+                if index:
+                    lay.addSpacing(14)
+                label = QLabel(section)
+                label.setObjectName("navSection")
+                lay.addWidget(label)
+                lay.addSpacing(6)
             button = NavButton(glyph, name)
             button.setChecked(index == 0)
             self.nav_group.addButton(button, index)
             lay.addWidget(button)
-            if index == 0:
-                lay.addSpacing(6)
-                setup = QLabel("SETUP")
-                setup.setObjectName("navSection")
-                lay.addWidget(setup)
-                lay.addSpacing(6)
         lay.addStretch(1)
 
         version = QLabel(f"v{__version__}  ·  companion to A.N.S Watcher")
@@ -321,9 +340,8 @@ class MainWindow(QWidget):
         page, lay = scroll_page()
         lay.addLayout(heading(
             "Dashboard",
-            "Keep ARK in front and drive everything from the global hotkeys. "
-            "The macro swaps between farming and emptying your inventory on "
-            "its own."))
+            "Everything runs from the keys below. Keep ARK in front — the farm "
+            "macro pauses by itself the moment it is not.", kicker="CONTROL"))
 
         stats = QHBoxLayout()
         stats.setSpacing(14)
@@ -334,7 +352,7 @@ class MainWindow(QWidget):
             stats.addWidget(tile, 1)
         lay.addLayout(stats)
 
-        control = Card("Control", accent=True)
+        control = Card("Farm macro", accent=True, icon="pickaxe")
         row = QHBoxLayout()
         row.setSpacing(11)
         self.btn_start = QPushButton("  Start macro")
@@ -344,7 +362,7 @@ class MainWindow(QWidget):
         self.btn_start.setIcon(icons.icon("play", "#04222B", 16))
         self.btn_start.clicked.connect(self._toggle_macro)
         self.btn_drop = QPushButton("  Drop now")
-        self.btn_drop.setIcon(icons.icon("trash", T.TEXT_DIM, 15))
+        self.btn_drop.setIcon(icons.icon("hand-drop", T.TEXT_DIM, 15))
         self.btn_drop.setIconSize(QSize(15, 15))
         self.btn_drop.setCursor(Qt.PointingHandCursor)
         self.btn_drop.clicked.connect(self._drop_now)
@@ -352,32 +370,11 @@ class MainWindow(QWidget):
         row.addWidget(self.btn_drop, 1)
         control.add(row)
 
-        chips = QHBoxLayout()
-        chips.setSpacing(8)
-        self.chip_toggle = chip("")
-        self.chip_drop = chip("")
-        self.chip_panic = chip("")
-        for item in (self.chip_toggle, self.chip_drop, self.chip_panic):
-            chips.addWidget(item)
-        chips.addStretch(1)
-        control.add(chips)
-
         self.lbl_ready = hint_label("")
         control.add(self.lbl_ready)
         lay.addWidget(control)
 
-        cycle = Card("What one drop pass does")
-        for number, title, detail in (
-            ("1", "Pause and open", "stops clicking and presses the inventory key"),
-            ("2", "Focus the filter", "clicks the search field"),
-            ("3", "Type the keyword", "one enabled template at a time"),
-            ("4", "Check the box", "reads it — no keyword in there, no drop"),
-            ("5", "Drop All", "with the filter on, only what is listed falls"),
-            ("6", "Repeat and resume",
-             "the drop clears the filter, Esc closes, back to farming"),
-        ):
-            cycle.add(step_row(number, title, detail))
-        lay.addWidget(cycle)
+        lay.addWidget(self._keys_card())
 
         self.mini_log = QPlainTextEdit()
         self.mini_log.setObjectName("log")
@@ -390,15 +387,74 @@ class MainWindow(QWidget):
         self._refresh_hotkey_chips()
         return page
 
-    # ------------------------------------------------------------ autoclick
-    def _page_autoclick(self) -> QWidget:
+    def _keys_card(self) -> Card:
+        """
+        Every key the app answers to, in one place.
+
+        Split by what the key *is*: the four global ones work anywhere and are
+        the app's own, and the two macro keys only mean something with ARK in
+        front. Reading them as one list was the confusing part.
+        """
+        card = Card("Your keys", "What each one does, and when it applies.",
+                    icon="keyboard")
+
+        card.add(group_label("GLOBAL · anywhere, any time"))
+        self.key_rows: dict[str, KeyRow] = {}
+        for name, title, detail, tone in (
+            ("toggle", "Start / stop the farm macro",
+             "clicking, the drop passes, auto-feed — all of it", T.OK),
+            ("drop_now", "Run a drop pass now",
+             "empties the checked templates without waiting for the trigger",
+             T.ACCENT),
+            ("panic", "Emergency stop",
+             "drops everything the app is doing, at once", T.ERR),
+            ("pick_points", "Freeze the screen and pick",
+             "for capturing the two farm points and the two areas", T.ACCENT),
+        ):
+            row = KeyRow("", title, detail, tone)
+            self.key_rows[name] = row
+            card.add(row)
+
+        card.add(Divider())
+        card.add(group_label("IN GAME · only with ARK in front"))
+        for name, title, detail in (
+            ("hold", "Sweep a block of slots",
+             "drop everything in the area you picked, on the Drop page"),
+            ("skin", "Run the hotbar strip",
+             "the macro holds Shift + a slot for you, on the Overcap skin page"),
+        ):
+            row = KeyRow("", title, detail, T.WARN)
+            self.key_rows[name] = row
+            card.add(row)
+        return card
+
+    # ----------------------------------------------------------------- farm
+    def _page_farm(self) -> QWidget:
+        """
+        Everything the farm macro is made of, in the order you set it up.
+
+        Swinging, then when to stop and empty the bag, then what to drop, then
+        the two points those drops are clicked on. They used to be three pages,
+        which meant setting up one macro by walking a menu.
+        """
         page, lay = scroll_page()
         lay.addLayout(heading(
-            "Autoclick",
-            "Speed is drawn at random between the two bounds on every click, so "
-            "the rhythm never turns into a metronome."))
+            "Farm",
+            "The long-running macro: it swings for you, and every so often it "
+            "opens the inventory and throws out what you told it to.",
+            kicker="MACRO"))
+        self._farm_clicking(lay)
+        self._farm_drops(lay)
+        lay.addWidget(self._auto_feed_card())
+        self._farm_points(lay)
+        lay.addStretch(1)
+        self._sync_trigger_fields()
+        return page
 
-        card = Card("Clicking")
+    def _farm_clicking(self, lay) -> None:
+        card = Card("Swinging", "Speed is drawn at random between the two "
+                                "bounds on every click, so the rhythm never "
+                                "turns into a metronome.", icon="mouse")
         grid = FormGrid(pairs=2)
         self.cb_button = combo(["left", "right", "middle"], width=124)
         self.cb_button.setCurrentText(self.cfg.autoclick.button)
@@ -420,7 +476,8 @@ class MainWindow(QWidget):
         lay.addWidget(card)
 
         pause = Card("Micro pauses",
-                     "A short breather every N clicks. Zero turns it off.")
+                     "A short breather every N clicks. Zero turns it off.",
+                     icon="clock")
         pgrid = FormGrid(pairs=2)
         self.sp_mp_every = spin(0, 5000, self.cfg.autoclick.micro_pause_every,
                                 " clicks", 10)
@@ -430,18 +487,10 @@ class MainWindow(QWidget):
         pause.add(pgrid)
         lay.addWidget(pause)
 
-        lay.addStretch(1)
-        return page
-
-    # ------------------------------------------------------------ templates
-    def _page_templates(self) -> QWidget:
-        page, lay = scroll_page()
-        lay.addLayout(heading(
-            "Templates",
-            "Every checked row is one Drop All pass: a name for you, plus the "
-            "keyword typed into ARK's inventory filter."))
-
-        trigger = Card("When it runs")
+    def _farm_drops(self, lay) -> None:
+        trigger = Card("When it empties the bag",
+                       "How often the macro stops swinging to run a drop pass.",
+                       icon="bolt")
         self.sw_drop = SwitchRow("Drop routine enabled", self.cfg.drop.enabled)
         trigger.add(self.sw_drop)
         tgrid = FormGrid(pairs=2)
@@ -469,7 +518,10 @@ class MainWindow(QWidget):
         trigger.add(self.hint_min_farm)
         lay.addWidget(trigger)
 
-        card = Card("Drop list")
+        card = Card("What to drop",
+                    "One checked row is one Drop All pass: a name for you, plus "
+                    "the keyword typed into ARK's inventory filter.",
+                    icon="list")
         self.tpl_editor = TemplateEditor(self.cfg.drop.templates)
         card.add(self.tpl_editor)
         card.add(hint_label(
@@ -483,7 +535,8 @@ class MainWindow(QWidget):
             "Waiting half a second for the filter to appear is a hope, not a "
             "check — and an unfiltered Drop All empties the whole bag. So the "
             "macro reads the search box before and after typing: no change in "
-            "those pixels means nothing was typed, and the drop is skipped.")
+            "those pixels means nothing was typed, and the drop is skipped.",
+            icon="shield")
         self.sw_verify = SwitchRow("Only drop when the keyword reached the "
                                    "search box", self.cfg.drop.verify_filter)
         guard.add(self.sw_verify)
@@ -498,7 +551,8 @@ class MainWindow(QWidget):
         dry = Card("Dry run",
                    "Runs the whole cycle — opens, filters, types — but never "
                    "clicks Drop All. Saves a screenshot of the filtered "
-                   "inventory to captures/ so you can check what would fall.")
+                   "inventory to captures/ so you can check what would fall.",
+                   icon="eye")
         self.sw_dry = SwitchRow("Run without dropping anything",
                                 self.cfg.drop.dry_run)
         dry.add(self.sw_dry)
@@ -507,7 +561,7 @@ class MainWindow(QWidget):
         timing = Card("Inventory and timings",
                       "Raise the waits if your server is laggy — a filter that "
                       "has not refreshed yet is the usual cause of dropping the "
-                      "wrong thing.")
+                      "wrong thing.", icon="clock")
         igrid = FormGrid(pairs=2)
         self.ed_inv_key = QLineEdit(self.cfg.drop.inventory_key)
         self.ed_inv_key.setMaxLength(10)
@@ -545,19 +599,13 @@ class MainWindow(QWidget):
             "fullscreen."))
         lay.addWidget(timing)
 
-        lay.addStretch(1)
-        self._sync_trigger_fields()
-        return page
-
-    # --------------------------------------------------------------- points
-    def _page_points(self) -> QWidget:
-        page, lay = scroll_page()
-        lay.addLayout(heading(
-            "Points",
-            "The two clicks of the routine depend on your resolution and on "
-            "what the HUD is showing. Freeze the screen once and pick them."))
-
-        guide = Card("Pick them on a frozen screen", accent=True)
+    def _farm_points(self, lay) -> None:
+        guide = Card(
+            "The two points it clicks",
+            "A drop pass clicks the search field and then Drop All. Where those "
+            "sit depends on your resolution and on what the HUD is showing, so "
+            "they are picked once on a frozen screen.",
+            accent=True, icon="target")
         open_step = step_row("1", "Open the inventory in ARK", "")
         self.lbl_open_step = open_step.detail_label
         guide.add(open_step)
@@ -606,29 +654,91 @@ class MainWindow(QWidget):
         fallback = Card("No screenshot? Estimate instead",
                         "ARK anchors its HUD to the centre of the screen and "
                         "scales it with height, so the maths also holds on "
-                        "ultrawide. Always verify with Test afterwards.")
+                        "ultrawide. Always verify with Test afterwards.",
+                        icon="sliders")
         btn_suggest = QPushButton("Estimate points for this resolution")
         btn_suggest.setCursor(Qt.PointingHandCursor)
         btn_suggest.clicked.connect(self._suggest_points)
         fallback.add(btn_suggest)
         lay.addWidget(fallback)
 
+    def _auto_feed_card(self) -> Card:
+        """Feeding belongs with the farm macro: it only runs while it does."""
+        feed = Card(
+            "Auto-feed", icon="shield", subtitle=
+            "Presses two hotbar slots on a timer so the character eats and "
+            "drinks without you. Put the food on one slot and a full waterskin "
+            "or canteen on the other.")
+        self.sw_feed = SwitchRow("Feed while farming", self.cfg.auto_feed.enabled)
+        feed.add(self.sw_feed)
+        fgrid = FormGrid(pairs=2)
+        self.sp_feed_interval = spin(30, 7200, self.cfg.auto_feed.interval_s,
+                                     " s", 30)
+        fgrid.add("Feed every", self.sp_feed_interval,
+                  "360 s is six minutes — often enough for the usual food and "
+                  "water drain")
+        self.sp_feed_gap = spin(50, 3000, self.cfg.auto_feed.gap_ms, " ms", 50)
+        fgrid.add("Gap between presses", self.sp_feed_gap,
+                  "So the game does not fold the two into one keystroke")
+        self.cb_food = combo(HOTBAR, HOTBAR.index(self.cfg.auto_feed.food_key)
+                             if self.cfg.auto_feed.food_key in HOTBAR else 3,
+                             width=124)
+        fgrid.add("Food slot", self.cb_food)
+        self.cb_water = combo(HOTBAR, HOTBAR.index(self.cfg.auto_feed.water_key)
+                              if self.cfg.auto_feed.water_key in HOTBAR else 4,
+                              width=124)
+        fgrid.add("Water slot", self.cb_water)
+        feed.add(fgrid)
+        self.feed_note = hint_label("")
+        feed.add(self.feed_note)
+        feed.add(hint_label(
+            "It fires from inside the farming loop, never during a drop pass: a "
+            "hotbar key sent while the search field has the keyboard would land "
+            "in the filter as a digit instead of reaching the hotbar. It also "
+            "waits while ARK is not in front, so the presses cannot go into "
+            "whatever you are doing instead. What it cannot do is see your food "
+            "bar — it presses the slot, and an empty slot presses nothing."))
+        return feed
+
+    # ----------------------------------------------------------------- drop
+    def _page_drop(self) -> QWidget:
+        page, lay = scroll_page()
+        lay.addLayout(heading(
+            "Drop",
+            "Nothing to do with the farm loop. Point ARK's drop key at a block "
+            "of slots and the cursor sweeps them, dropping every stack it "
+            "passes — for emptying a forge or a bag by hand, fast.",
+            kicker="MACRO"))
         lay.addWidget(self._hold_drop_card())
-        lay.addWidget(self._skin_overcap_card())
+        lay.addWidget(self._hold_area_card())
         self._sync_hold_mode_note()
+        lay.addStretch(1)
+        return page
+
+    # --------------------------------------------------------- overcap skin
+    def _page_overcap(self) -> QWidget:
+        page, lay = scroll_page()
+        lay.addLayout(heading(
+            "Overcap skin",
+            "Press your key and the macro holds Shift + a hotbar slot for you "
+            "while the cursor runs your hotbar end to end and back, in a loop.",
+            kicker="MACRO"))
+        lay.addWidget(self._skin_overcap_card())
+        lay.addWidget(self._skin_strip_card())
         lay.addStretch(1)
         return page
 
     # ------------------------------------------------------- skin overcap
     def _skin_overcap_card(self) -> Card:
+        """The keys — yours to press, the chord for the macro to hold."""
         skin = self.cfg.skin_overcap
-        card = Card(
-            "Skin overcap",
-            "Press your key and the macro holds Shift + a hotbar slot for you "
-            "while the cursor runs the strip below end to end and back, in a "
-            "loop. Your hands stay free.")
-        self.sw_skin = SwitchRow("Run the strip on a key", skin.enabled)
+        card = Card("Keys and mode",
+                    "Two keys, and they are not the same key: the one you press "
+                    "belongs to the app, the chord belongs to the game and the "
+                    "macro is what holds it.", icon="keyboard")
+        self.sw_skin = SwitchRow("Skin overcap enabled", skin.enabled)
         card.add(self.sw_skin)
+        card.add(Divider())
 
         sgrid = FormGrid(pairs=2)
         self.ed_skin_activate = QLineEdit(skin.activate_key)
@@ -645,16 +755,32 @@ class MainWindow(QWidget):
                                  if skin.key in HOTBAR else 1, width=124)
         sgrid.add("Macro holds Shift +", self.cb_skin_key,
                   "The hotbar slot the macro presses and holds while it sweeps")
-        self.sp_skin_dwell = spin(5, 1000, skin.dwell_ms, " ms", 5)
-        sgrid.add("Time per stop", self.sp_skin_dwell)
-        self.sp_skin_stops = spin(2, 40, skin.stops, "", 1)
-        sgrid.add("Stops across", self.sp_skin_stops,
-                  "How many places the cursor pauses between the two ends. One "
-                  "per hotbar slot is the usual answer")
         sgrid.skip()
         card.add(sgrid)
         self.skin_note = hint_label("")
         card.add(self.skin_note)
+        card.add(hint_label(
+            "The chord goes down when the sweep starts and comes back up when "
+            "it ends, by every route out including losing focus and closing the "
+            "app — a Shift left down would follow you into everything else you "
+            "type."))
+        return card
+
+    def _skin_strip_card(self) -> Card:
+        """The hotbar strip, and how fast the cursor runs it."""
+        skin = self.cfg.skin_overcap
+        card = Card("The strip it runs",
+                    "Drag the box over your hotbar. It is one row, so only the "
+                    "middle is swept — the height just has to cover the slots.",
+                    icon="target")
+        sgrid = FormGrid(pairs=2)
+        self.sp_skin_stops = spin(2, 40, skin.stops, "", 1)
+        sgrid.add("Stops across", self.sp_skin_stops,
+                  "How many places the cursor pauses between the two ends. One "
+                  "per hotbar slot is the usual answer")
+        self.sp_skin_dwell = spin(5, 1000, skin.dwell_ms, " ms", 5)
+        sgrid.add("Time per stop", self.sp_skin_dwell)
+        card.add(sgrid)
 
         row = QHBoxLayout()
         row.setSpacing(10)
@@ -670,25 +796,21 @@ class MainWindow(QWidget):
         self.lbl_skin_area = hint_label("")
         card.add(self.lbl_skin_area)
         card.add(hint_label(
-            "Drag the box over your hotbar. Only the middle of the box is "
-            "swept — it is one row, so the height only has to cover the slots. "
-            "The chord goes down when the sweep starts and comes back up when "
-            "it ends, by every route out including losing focus and closing the "
-            "app — a Shift left down would follow you into everything else you "
-            "type. Same guards as hold-to-drop, and the two never run at once "
-            "because there is one cursor."))
+            "Same guards as the Drop macro — ARK in front, farm macro stopped — "
+            "and the two never run at once, because there is one cursor."))
         return card
 
     # ------------------------------------------------------- hold to drop
     def _hold_drop_card(self) -> Card:
+        """The keys and the mode — who presses what."""
         hold = self.cfg.hold_drop
-        card = Card(
-            "Hold-to-drop",
-            "Nothing to do with the farm loop. Hold ARK's drop key over a block "
-            "of slots and the cursor sweeps them, dropping every stack it passes "
-            "— for emptying a forge or a bag by hand, fast.")
-        self.sw_hold = SwitchRow("Sweep the area with the drop key", hold.enabled)
+        card = Card("Keys and mode",
+                    "Two keys: the one you press to start, and the drop key "
+                    "the game acts on. Which of you sends it depends on the "
+                    "mode.", icon="keyboard")
+        self.sw_hold = SwitchRow("Hold-to-drop enabled", hold.enabled)
         card.add(self.sw_hold)
+        card.add(Divider())
 
         hgrid = FormGrid(pairs=2)
         self.cb_hold_mode = combo(["Press to start and stop",
@@ -698,11 +820,6 @@ class MainWindow(QWidget):
         self.cb_hold_mode.currentIndexChanged.connect(self._sync_hold_mode_note)
         hgrid.add("How it runs", self.cb_hold_mode)
         hgrid.skip()
-        self.hold_mode_note = hint_label("")
-        card.add(hgrid)
-        card.add(self.hold_mode_note)
-
-        hgrid = FormGrid(pairs=2)
         self.ed_hold_activate = QLineEdit(hold.activate_key)
         self.ed_hold_activate.setMaxLength(10)
         self.ed_hold_activate.setFixedWidth(124)
@@ -717,19 +834,38 @@ class MainWindow(QWidget):
         hgrid.add("Drop key", self.ed_hold_key,
                   "Whatever ARK has bound to dropping the item under the "
                   "cursor. Default: o")
-        self.sp_hold_dwell = spin(5, 1000, hold.dwell_ms, " ms", 5)
-        hgrid.add("Time per slot", self.sp_hold_dwell,
-                  "Too low and the game misses the hover — raise it on a "
-                  "streamed session, which pays a round trip per slot")
+        card.add(hgrid)
+        self.hold_mode_note = hint_label("")
+        card.add(self.hold_mode_note)
+        card.add(hint_label(
+            "Neither key is registered as a hotkey — a registered hotkey is "
+            "swallowed before ARK sees it, and the drop key has to reach the "
+            "game. So the activation press reaches it too: pick something ARK "
+            "has nothing bound to."))
+        return card
+
+    def _hold_area_card(self) -> Card:
+        """The block of slots, and how fast the cursor walks it."""
+        hold = self.cfg.hold_drop
+        card = Card("The block it sweeps",
+                    "Drag a box over the slots you want emptied. The sweep path "
+                    "is drawn inside it as you drag, so you can check the dots "
+                    "land on the slot centres before committing.", icon="target")
+        hgrid = FormGrid(pairs=2)
         self.sp_hold_cols = spin(1, 20, hold.columns, "", 1)
         hgrid.add("Columns", self.sp_hold_cols)
         self.sp_hold_rows = spin(1, 20, hold.rows, "", 1)
         hgrid.add("Rows", self.sp_hold_rows)
+        self.sp_hold_dwell = spin(5, 1000, hold.dwell_ms, " ms", 5)
+        hgrid.add("Time per slot", self.sp_hold_dwell,
+                  "Too low and the game misses the hover — raise it on a "
+                  "streamed session, which pays a round trip per slot")
+        hgrid.skip()
         card.add(hgrid)
 
         row = QHBoxLayout()
         row.setSpacing(10)
-        self.btn_hold_area = QPushButton("  Freeze screen and select the area")
+        self.btn_hold_area = QPushButton("  Freeze screen and select the block")
         self.btn_hold_area.setObjectName("primary")
         self.btn_hold_area.setCursor(Qt.PointingHandCursor)
         self.btn_hold_area.setIcon(icons.icon("search", "#04222B", 16))
@@ -741,12 +877,10 @@ class MainWindow(QWidget):
         self.lbl_hold_area = hint_label("")
         card.add(self.lbl_hold_area)
         card.add(hint_label(
-            "The key is watched, never registered as a hotkey: a registered "
-            "hotkey is swallowed before ARK sees it, so your own press would "
-            "stop reaching the game and nothing would drop. Either mode sweeps "
-            "only while ARK is in front, stops the moment it is not, and "
-            "refuses while the macro is farming — an autoclick loose in an open "
-            "inventory would move items around instead."))
+            "It sweeps only while ARK is in front, stops the moment it is not, "
+            "and refuses while the farm macro is running — an autoclick loose "
+            "in an open inventory would move items around instead of dropping "
+            "them."))
         return card
 
     def _sync_hold_mode_note(self) -> None:
@@ -802,12 +936,18 @@ class MainWindow(QWidget):
         return thumb, x_box, y_box, card
 
     # ------------------------------------------------------------- settings
+
+    # ------------------------------------------------------------- settings
     def _page_settings(self) -> QWidget:
         page, lay = scroll_page()
-        lay.addLayout(heading("Settings",
-                              "Global hotkeys and how input reaches the game."))
+        lay.addLayout(heading(
+            "Settings",
+            "The keys the app answers to, how its input reaches the game, and "
+            "how it keeps itself up to date.", kicker="SYSTEM"))
 
-        keys = Card("Global hotkeys", "They fire even while ARK has focus.")
+        keys = Card("Global hotkeys",
+                    "The app's own keys. They fire even while ARK has focus, "
+                    "and the game never sees them.", icon="keyboard")
         kgrid = FormGrid(pairs=2)
         self.hk_toggle = HotkeyEdit(self.cfg.hotkeys.toggle)
         self.hk_drop = HotkeyEdit(self.cfg.hotkeys.drop_now)
@@ -823,7 +963,9 @@ class MainWindow(QWidget):
         keys.add(kgrid)
         lay.addWidget(keys)
 
-        target = Card("Target and delivery")
+        target = Card("Target and delivery",
+                      "Which window the macro aims at, and how its clicks and "
+                      "keys get there.", icon="cursor")
         self.cb_platform = combo(["Native (installed game)", "GeForce NOW"],
                                  0 if self.cfg.target.platform == "native" else 1,
                                  width=230)
@@ -874,43 +1016,8 @@ class MainWindow(QWidget):
         target.add(detect)
         lay.addWidget(target)
 
-        feed = Card(
-            "Auto-feed",
-            "Presses two hotbar slots on a timer so the character eats and "
-            "drinks without you. Put the food on one slot and a full waterskin "
-            "or canteen on the other.")
-        self.sw_feed = SwitchRow("Feed while farming", self.cfg.auto_feed.enabled)
-        feed.add(self.sw_feed)
-        fgrid = FormGrid(pairs=2)
-        self.sp_feed_interval = spin(30, 7200, self.cfg.auto_feed.interval_s,
-                                     " s", 30)
-        fgrid.add("Feed every", self.sp_feed_interval,
-                  "360 s is six minutes — often enough for the usual food and "
-                  "water drain")
-        self.sp_feed_gap = spin(50, 3000, self.cfg.auto_feed.gap_ms, " ms", 50)
-        fgrid.add("Gap between presses", self.sp_feed_gap,
-                  "So the game does not fold the two into one keystroke")
-        self.cb_food = combo(HOTBAR, HOTBAR.index(self.cfg.auto_feed.food_key)
-                             if self.cfg.auto_feed.food_key in HOTBAR else 3,
-                             width=124)
-        fgrid.add("Food slot", self.cb_food)
-        self.cb_water = combo(HOTBAR, HOTBAR.index(self.cfg.auto_feed.water_key)
-                              if self.cfg.auto_feed.water_key in HOTBAR else 4,
-                              width=124)
-        fgrid.add("Water slot", self.cb_water)
-        feed.add(fgrid)
-        self.feed_note = hint_label("")
-        feed.add(self.feed_note)
-        feed.add(hint_label(
-            "It fires from inside the farming loop, never during a drop pass: a "
-            "hotbar key sent while the search field has the keyboard would land "
-            "in the filter as a digit instead of reaching the hotbar. It also "
-            "waits while ARK is not in front, so the presses cannot go into "
-            "whatever you are doing instead. What it cannot do is see your food "
-            "bar — it presses the slot, and an empty slot presses nothing."))
-        lay.addWidget(feed)
 
-        afk = Card("Anti-AFK",
+        afk = Card("Anti-AFK", icon="clock", subtitle=
                    "A cloud session gets dropped when it sees no input for a "
                    "while. This taps one key on a timer to keep it alive — "
                    "F13 to F24 exist in the keyboard protocol but not on real "
@@ -947,7 +1054,7 @@ class MainWindow(QWidget):
         card = Card("Updates",
                     "Pulls straight from the repository this app is published "
                     "to, then restarts. Your config, captured points and "
-                    "screenshots are never touched.")
+                    "screenshots are never touched.", icon="refresh")
 
         self.lbl_version = hint_label("")
         card.add(self.lbl_version)
@@ -996,7 +1103,9 @@ class MainWindow(QWidget):
 
     def _page_log(self) -> QWidget:
         page, lay = scroll_page()
-        lay.addLayout(heading("Log", "Everything the macro did this session."))
+        lay.addLayout(heading(
+            "Log", "Everything the app did this session, newest at the bottom.",
+            kicker="SYSTEM"))
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("log")
         self.log_view.setReadOnly(True)
@@ -1006,6 +1115,8 @@ class MainWindow(QWidget):
         clear.clicked.connect(self.log_view.clear)
         lay.addWidget(clear, 0, Qt.AlignRight)
         return page
+
+    # ----------------------------------------------------------- ui syncing
 
     # ----------------------------------------------------------- ui syncing
     def _sync_trigger_fields(self) -> None:
@@ -1033,6 +1144,7 @@ class MainWindow(QWidget):
             self.sp_close_presses.setValue(1)
 
     @property
+
     def _streaming(self) -> bool:
         return self.cb_platform.currentIndex() == 1
 
@@ -1118,10 +1230,27 @@ class MainWindow(QWidget):
                 "to foreground.")
 
     def _refresh_hotkey_chips(self) -> None:
+        """Keep the dashboard key list showing the keys actually bound."""
         keys = self.cfg.hotkeys
-        self.chip_toggle.setText(f"{keys.toggle}   start / stop")
-        self.chip_drop.setText(f"{keys.drop_now}   drop now")
-        self.chip_panic.setText(f"{keys.panic}   emergency stop")
+        hold, skin = self.cfg.hold_drop, self.cfg.skin_overcap
+        bound = {
+            "toggle": keys.toggle,
+            "drop_now": keys.drop_now,
+            "panic": keys.panic,
+            "pick_points": keys.pick_points,
+            # the sweep key depends on the mode: in manual it is the drop key
+            # itself that starts it, not the activation key
+            "hold": hold.key if hold.mode == "manual" else hold.activate_key,
+            "skin": skin.activate_key,
+        }
+        for name, row in getattr(self, "key_rows", {}).items():
+            row.cap.set_key(bound.get(name, ""))
+        # a macro that is switched off gets a dimmed row rather than a missing
+        # one: the key still exists, it just will not do anything yet
+        for name, feature in (("hold", hold), ("skin", skin)):
+            row = getattr(self, "key_rows", {}).get(name)
+            if row is not None:
+                row.setEnabled(feature.enabled)
         if hasattr(self, "lbl_pick_step"):
             self.lbl_pick_step.setText(f"Press {keys.pick_points}")
 
@@ -1142,6 +1271,8 @@ class MainWindow(QWidget):
             self.lbl_ready.setText(
                 "Ready to farm." if ready or not drop.enabled
                 else "Set the two points on the Points tab before starting.")
+
+    # ---------------------------------------------------------- config i/o
 
     # ---------------------------------------------------------- config i/o
     def _wire_autosave(self) -> None:
@@ -1276,6 +1407,8 @@ class MainWindow(QWidget):
             self._log(f"could not save the config: {error}", "err")
 
     # ---------------------------------------------------------- macro ctrl
+
+    # ---------------------------------------------------------- macro ctrl
     def _toggle_macro(self) -> None:
         if self.engine and self.engine.isRunning():
             self._stop_macro()
@@ -1296,8 +1429,7 @@ class MainWindow(QWidget):
         if drop.enabled and missing:
             self._log("set the filter and Drop All points before arming the "
                       "drop routine", "err")
-            self.nav_group.button(3).setChecked(True)
-            self.stack.setCurrentIndex(3)
+            self._go(PAGE_FARM)
             return
 
         self.engine = MacroEngine(self.cfg)
@@ -1347,6 +1479,8 @@ class MainWindow(QWidget):
     def _on_state(self, state: str) -> None:
         self._state = state
         self.titlebar.status.set_state(state)
+
+    # ---------------------------------------------------------- hold to drop
 
     # ---------------------------------------------------------- hold to drop
     def _sync_hold_drop(self) -> None:
@@ -2041,8 +2175,7 @@ class MainWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        self.nav_group.button(3).setChecked(True)
-        self.stack.setCurrentIndex(3)
+        self._go(PAGE_FARM)
 
     # ------------------------------------------------------------ previews
     def _invalidate_thumb(self, key: str) -> None:
