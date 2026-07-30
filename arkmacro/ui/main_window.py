@@ -189,7 +189,11 @@ class MainWindow(QWidget):
         self._sweep_path: list[tuple[int, int]] = []
         self._sweep_index = 0
         self._sweep_return: tuple[int, int] | None = None
+        self._sweep_hwnd: int | None = None
         self._hold_refused = False
+        # toggling acts on the press, so the level has to be remembered between
+        # ticks to tell a new press from a key that is simply still down
+        self._hold_was_down = False
 
         # unattended updates: a check on a long timer, and a pull that waits for
         # the macro to be idle before it restarts the app
@@ -600,6 +604,7 @@ class MainWindow(QWidget):
         lay.addWidget(fallback)
 
         lay.addWidget(self._hold_drop_card())
+        self._sync_hold_mode_note()
         lay.addStretch(1)
         return page
 
@@ -611,8 +616,18 @@ class MainWindow(QWidget):
             "Nothing to do with the farm loop. Hold ARK's drop key over a block "
             "of slots and the cursor sweeps them, dropping every stack it passes "
             "— for emptying a forge or a bag by hand, fast.")
-        self.sw_hold = SwitchRow("Sweep while the drop key is held", hold.enabled)
+        self.sw_hold = SwitchRow("Sweep the area with the drop key", hold.enabled)
         card.add(self.sw_hold)
+
+        hgrid = FormGrid(pairs=2)
+        self.cb_hold_mode = combo(["Hold the key", "Press to start and stop"],
+                                  1 if hold.mode == "toggle" else 0, width=230)
+        self.cb_hold_mode.currentIndexChanged.connect(self._sync_hold_mode_note)
+        hgrid.add("How it runs", self.cb_hold_mode)
+        hgrid.skip()
+        self.hold_mode_note = hint_label("")
+        card.add(hgrid)
+        card.add(self.hold_mode_note)
 
         hgrid = FormGrid(pairs=2)
         self.ed_hold_key = QLineEdit(hold.key)
@@ -646,13 +661,27 @@ class MainWindow(QWidget):
         self.lbl_hold_area = hint_label("")
         card.add(self.lbl_hold_area)
         card.add(hint_label(
-            "The app never presses the key — you hold it, the app moves the "
-            "mouse. It cannot press it: a key registered as a global hotkey is "
-            "swallowed before ARK sees it, and then nothing would drop. It also "
-            "sweeps only while ARK is in front, and refuses while the macro is "
-            "farming — an autoclick loose in an open inventory would move items "
-            "around instead."))
+            "The key is watched, never registered as a hotkey: a registered "
+            "hotkey is swallowed before ARK sees it, so your own press would "
+            "stop reaching the game and nothing would drop. Either mode sweeps "
+            "only while ARK is in front, stops the moment it is not, and "
+            "refuses while the macro is farming — an autoclick loose in an open "
+            "inventory would move items around instead."))
         return card
+
+    def _sync_hold_mode_note(self) -> None:
+        if self.cb_hold_mode.currentIndex() == 1:
+            self.hold_mode_note.setText(
+                "One press starts the sweep, another stops it. Your finger is "
+                "off the key, so the app taps it once per slot — without that a "
+                "toggled sweep would tour the slots and drop nothing. The press "
+                "that starts it also reaches ARK, so it drops whatever the "
+                "cursor is on at that moment.")
+        else:
+            self.hold_mode_note.setText(
+                "The sweep runs while you hold the key and stops within one "
+                "slot of letting go. The app sends no keys at all here — your "
+                "finger is what tells ARK to drop.")
 
     def _point_card(self, title: str, subtitle: str, point: list[int], key: str):
         card = Card(title, subtitle)
@@ -1048,7 +1077,7 @@ class MainWindow(QWidget):
             self.ed_afk_key, self.sw_feed.switch, self.sp_feed_interval,
             self.sp_feed_gap, self.cb_food, self.cb_water,
             self.sw_hold.switch, self.ed_hold_key, self.sp_hold_cols,
-            self.sp_hold_rows, self.sp_hold_dwell,
+            self.sp_hold_rows, self.sp_hold_dwell, self.cb_hold_mode,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -1111,6 +1140,7 @@ class MainWindow(QWidget):
         hold = self.cfg.hold_drop
         hold.enabled = self.sw_hold.switch.isChecked()
         hold.key = self.ed_hold_key.text().strip().lower() or "o"
+        hold.mode = "toggle" if self.cb_hold_mode.currentIndex() == 1 else "hold"
         hold.columns = self.sp_hold_cols.value()
         hold.rows = self.sp_hold_rows.value()
         hold.dwell_ms = self.sp_hold_dwell.value()
@@ -1225,6 +1255,10 @@ class MainWindow(QWidget):
         hold = self.cfg.hold_drop
         ready = hold.enabled and sweep.usable(hold.area)
         if ready:
+            vk = w.vk_from_name(hold.key)
+            # a key that is already down as this arms is not a fresh press, or
+            # switching the mode on with a finger on the key would start a sweep
+            self._hold_was_down = bool(vk is not None and w.key_is_down(vk))
             self._hold_watch.start()
         else:
             self._hold_watch.stop()
@@ -1243,25 +1277,18 @@ class MainWindow(QWidget):
         pace = slots * hold.dwell_ms / 1000.0
         res = hold.area_resolution
         where = f", captured at {res[0]}x{res[1]}" if res and all(res) else ""
+        driven = (f"a press of «{hold.key.upper()}» starts it, another stops it"
+                  if hold.mode == "toggle"
+                  else f"it loops while «{hold.key.upper()}» is held")
         self.lbl_hold_area.setText(
             f"{width}x{height} px at ({x}, {y}){where} — {hold.columns}x"
-            f"{hold.rows} = {slots} slots, about {pace:.1f}s per lap. It keeps "
-            f"looping while «{hold.key.upper()}» is held.")
+            f"{hold.rows} = {slots} slots, about {pace:.1f}s per lap, and "
+            f"{driven}.")
 
-    def _watch_hold_key(self) -> None:
-        """Start a sweep while the drop key is down, stop it when it comes up."""
-        hold = self.cfg.hold_drop
-        vk = w.vk_from_name(hold.key)
-        if vk is None:
-            self._log(f'hold-to-drop: "{hold.key}" is not a key name', "err")
-            self._hold_watch.stop()
-            return
-        if not w.key_is_down(vk):
-            self._stop_sweep()
-            self._hold_refused = False
-            return
-        if self._sweep_timer.isActive() or self._picking:
-            return
+    def _can_sweep(self) -> bool:
+        """Whether it is safe to start a sweep right now, and say why not once."""
+        if self._picking:
+            return False
         # an autoclick loose in an open inventory moves items around; the sweep
         # would be the least of the damage
         if self.engine is not None and self.engine.isRunning():
@@ -1269,10 +1296,43 @@ class MainWindow(QWidget):
                 self._hold_refused = True
                 self._log("hold-to-drop ignored while the macro is farming — "
                           "stop it first", "warn")
+            return False
+        return w.is_foreground(w.find_window(self.cfg.target.window_title))
+
+    def _watch_hold_key(self) -> None:
+        """
+        Drive the sweep from the drop key.
+
+        Holding reads the key's level; toggling reads its edge, so the press is
+        acted on once and the release means nothing.
+        """
+        hold = self.cfg.hold_drop
+        vk = w.vk_from_name(hold.key)
+        if vk is None:
+            self._log(f'hold-to-drop: "{hold.key}" is not a key name', "err")
+            self._hold_watch.stop()
             return
-        if not w.is_foreground(w.find_window(self.cfg.target.window_title)):
+        down = w.key_is_down(vk)
+        pressed = down and not self._hold_was_down
+        self._hold_was_down = down
+
+        if hold.mode == "toggle":
+            if not pressed:
+                return
+            if self._sweep_timer.isActive():
+                self._stop_sweep()
+            elif self._can_sweep():
+                self._start_sweep()
             return
-        self._start_sweep()
+
+        if not down:
+            self._stop_sweep()
+            self._hold_refused = False
+            return
+        if self._sweep_timer.isActive():
+            return
+        if self._can_sweep():
+            self._start_sweep()
 
     def _start_sweep(self) -> None:
         hold = self.cfg.hold_drop
@@ -1280,23 +1340,45 @@ class MainWindow(QWidget):
         if not path:
             return
         self._sweep_path = path
-        self._sweep_index = 0
         self._sweep_return = w.get_cursor_pos()
+        # remembered rather than looked up every tick: find_window walks every
+        # window on the desktop, and this runs 25 times a second
+        self._sweep_hwnd = w.find_window(self.cfg.target.window_title)
+        # step onto the first slot here, so it gets a full dwell before the tick
+        # that presses the key on it
+        w.move_cursor(*path[0])
+        self._sweep_index = 1
         self._sweep_timer.start(hold.dwell_ms)
-        self._log(f"hold-to-drop: sweeping {len(path)} slots", "info")
+        how = ("press again to stop" if hold.mode == "toggle"
+               else "while the key is held")
+        self._log(f"hold-to-drop: sweeping {len(path)} slots, {how}", "info")
 
     def _sweep_step(self) -> None:
-        """One slot per tick, looping, until the key comes up."""
+        """
+        One slot per tick, looping, until it is told to stop.
+
+        The key is pressed here only when toggling. While the key is *held*
+        there is nothing to send — the player's own finger is already telling
+        ARK to drop, and a press on top of that would be a second drop.
+        """
         hold = self.cfg.hold_drop
         vk = w.vk_from_name(hold.key)
+        if vk is None or not self._sweep_path:
+            self._stop_sweep()
+            return
         # re-checked here and not only on the watch timer: this runs far more
         # often, so the sweep stops within one slot of the key being released
-        if vk is None or not w.key_is_down(vk):
+        if hold.mode == "hold" and not w.key_is_down(vk):
             self._stop_sweep()
             return
-        if not self._sweep_path:
+        # in either mode, a game that is no longer in front means the cursor and
+        # the presses are landing in somebody else's window
+        if not w.is_foreground(self._sweep_hwnd):
             self._stop_sweep()
             return
+        if hold.mode == "toggle":
+            # the cursor has been resting on this slot for a full dwell
+            w.tap(vk, hold=0.03)
         x, y = self._sweep_path[self._sweep_index % len(self._sweep_path)]
         w.move_cursor(x, y)
         self._sweep_index += 1

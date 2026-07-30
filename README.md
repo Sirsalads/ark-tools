@@ -269,20 +269,35 @@ on this profile — see below.
 
 ## Hold-to-drop
 
-**Points → Hold-to-drop.** Nothing to do with the farm loop. Hold ARK's drop key
-over a block of slots and the cursor sweeps them, dropping every stack it passes
-— for emptying a forge or a bag by hand, fast.
+**Points → Hold-to-drop.** Nothing to do with the farm loop. Point ARK's drop key
+at a block of slots and the cursor sweeps them, dropping every stack it passes —
+for emptying a forge or a bag by hand, fast. Hold the key, or press once to start
+and once to stop.
 
-**The app never presses the key. You hold it, the app moves the mouse.** That is
-not a preference, it is the only way this can work:
+The key is only ever **watched**, with `GetAsyncKeyState`, never registered:
 
 > A key registered as a global hotkey is **swallowed before the game sees it**.
-> Bind the drop key that way and ARK never receives it — the cursor would tour
-> the slots and drop nothing at all.
+> Bind the drop key that way and your own press would stop reaching ARK — the
+> cursor would tour the slots and drop nothing at all.
 
-So the key is only *watched*, with `GetAsyncKeyState`, which reads the keyboard
-without consuming anything. Everything else the app owns: the path, the pace, and
-when to refuse.
+### Two ways to run it
+
+| How it runs | What happens | Who presses the key |
+|---|---|---|
+| **Hold the key** | Sweeps while you hold it, stops within one slot of letting go | **You.** The app sends nothing — your finger is what tells ARK to drop |
+| **Press to start and stop** | One press starts it, another stops it | **The app**, once per slot |
+
+That second column is the part worth understanding. In hold mode your finger
+keeps ARK dropping, so the app only has to move the mouse. The moment you *let
+go* — which is exactly what toggling means — ARK stops receiving the key, and a
+sweep that only moved the cursor would tour the slots and drop **nothing**. So in
+toggle mode the app taps the key itself on every slot, after the cursor has
+rested there a full dwell.
+
+One consequence of watching rather than swallowing: **the press that starts a
+toggled sweep also reaches ARK**, so it drops whatever the cursor is on at that
+moment. Same for the press that stops it — by then the cursor is inside the block
+anyway.
 
 ### Selecting the area
 
@@ -308,7 +323,10 @@ would drop those too.
 - **Sweep while the macro is farming.** An autoclick loose in an open inventory
   moves items around; the sweep would be the least of the damage. Stop the macro
   first — it says so in the log.
-- **Sweep while ARK is not in front**, or over the frozen picker.
+- **Keep sweeping once ARK is no longer in front.** It stops on the spot. This
+  matters most when toggling: there is no key being held to release, so focus is
+  the only thing between a running sweep and somebody else's window.
+- **Start over the frozen picker.**
 - **Watch a key that does not exist.** A typo in the field disarms the watcher
   instead of polling nothing forever.
 

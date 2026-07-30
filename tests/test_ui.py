@@ -553,6 +553,7 @@ print("OK  the close press count follows the key that gets sent")
 # ------------------------------------------------- 22) hold-to-drop sweep
 win.stack.setCurrentIndex(3)
 moves: list[tuple[int, int]] = []
+taps.clear()                                # `taps` records w.tap, from 20)
 held = {"down": False}
 w_module.move_cursor = lambda x, y: moves.append((x, y))
 w_module.get_cursor_pos = lambda: (7, 9)
@@ -586,12 +587,15 @@ assert moves == [], f"moved the mouse with the key up: {moves}"
 held["down"] = True
 win._watch_hold_key()
 assert win._sweep_timer.isActive(), "holding the key did not start the sweep"
-for _ in range(18):
+for _ in range(16):
     win._sweep_step()
-assert len(moves) == 18, f"{len(moves)} moves for 18 ticks"
+# one move to step onto the first slot, then one per tick
+assert len(moves) == 17, f"{len(moves)} moves for the start plus 16 ticks"
 assert moves[:4] == [(130, 225), (190, 225), (250, 225), (310, 225)], moves[:4]
 # and it loops: slot 17 is slot 1 again
 assert moves[16] == moves[0], "the sweep stopped instead of looping"
+# holding sends no keys at all — the player's own finger is what drops
+assert taps == [], f"pressed the key while the player was holding it: {taps}"
 
 # key up: it stops within one slot and puts the pointer back
 held["down"] = False
@@ -600,7 +604,56 @@ assert not win._sweep_timer.isActive(), "kept sweeping after the key came up"
 assert moves[-1] == (7, 9), f"the cursor was left on a slot: {moves[-1]}"
 print("OK  hold-to-drop sweeps while the key is held, and loops")
 
-# ------------------------- 22b) the guards around it
+# ------------------------- 22a) toggle mode: press on, press off
+win.cb_hold_mode.setCurrentIndex(1)         # press to start and stop
+win._pull()
+moves.clear()
+taps.clear()
+assert "another stops it" in win.lbl_hold_area.text(), win.lbl_hold_area.text()
+
+# the key going down is a press; holding it down is not another one
+held["down"] = True
+win._watch_hold_key()
+assert win._sweep_timer.isActive(), "the press did not start the sweep"
+win._watch_hold_key()
+win._watch_hold_key()
+assert win._sweep_timer.isActive(), "a still-held key was read as a new press"
+
+# it keeps going with the key released — that is the whole point of the mode
+held["down"] = False
+for _ in range(4):
+    win._watch_hold_key()
+    win._sweep_step()
+assert win._sweep_timer.isActive(), "letting go stopped a toggled sweep"
+# and because nobody is holding the key, the app has to send it itself
+assert len(taps) == 4, f"a toggled sweep sent {len(taps)} presses for 4 slots"
+assert set(taps) == {0x4F}, taps
+
+# the next press stops it, and the cursor goes back
+held["down"] = True
+win._watch_hold_key()
+assert not win._sweep_timer.isActive(), "the second press did not stop it"
+assert moves[-1] == (7, 9), f"the cursor was left on a slot: {moves[-1]}"
+held["down"] = False
+win._watch_hold_key()
+print("OK  toggle mode starts and stops on a press, and sends the key itself")
+
+# ------------------------- 22b) a toggled sweep stops if ARK goes away
+# nobody is holding a key to release, so losing focus is the only thing left
+# between a runaway sweep and somebody else's window
+held["down"] = True
+win._watch_hold_key()
+held["down"] = False
+assert win._sweep_timer.isActive()
+w_module.is_foreground = lambda _h: False
+win._sweep_step()
+assert not win._sweep_timer.isActive(), "kept sweeping after ARK lost focus"
+w_module.is_foreground = lambda _h: True
+win.cb_hold_mode.setCurrentIndex(0)
+win._pull()
+print("OK  a toggled sweep gives up when the game is no longer in front")
+
+# ------------------------- 22c) the guards around it
 held["down"] = True
 moves.clear()
 
@@ -644,7 +697,7 @@ assert not win._hold_watch.isActive(), "disabling did not stop the watcher"
 held["down"] = False
 print("OK  hold-to-drop refuses while farming, unfocused, picking or misbound")
 
-# ------------------------- 22c) the area picker previews the real path
+# ------------------------- 22d) the area picker previews the real path
 from arkmacro.ui.picker import AreaPicker  # noqa: E402
 
 area_picker = AreaPicker(shot, QRect(0, 0, 800, 600), 4, 4, (1920, 0))

@@ -104,6 +104,11 @@ class HoldDrop:
 
     enabled: bool = False
     key: str = "o"
+    # hold   -> sweep while the key is held; your finger keeps ARK dropping
+    # toggle -> one press starts, another stops. Nobody is holding the key then,
+    #           so the app taps it once per slot: a cursor tour with no key down
+    #           drops nothing at all
+    mode: str = "hold"
     area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # x,y,w,h
     # screen size when the area was selected, used to rescale it later
     area_resolution: list[int] = field(default_factory=lambda: [0, 0])
@@ -299,6 +304,10 @@ def _sanitize(cfg: "Config") -> None:
     hold.rows = _count(hold.rows, 5, 1, 20)
     hold.dwell_ms = _count(hold.dwell_ms, 40, 5, 1000)
     hold.key = str(hold.key).strip().lower()
+    # anything unrecognised falls back to holding, the mode where the app sends
+    # no keys of its own
+    hold.mode = ("toggle" if str(hold.mode).strip().lower() == "toggle"
+                 else "hold")
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)
