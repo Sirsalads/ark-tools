@@ -146,6 +146,10 @@ win.sp_min_farm.setValue(35)
 win.hk_toggle.setText("Ctrl+F5")
 win.sp_fx.setValue(277)
 win.sp_fy.setValue(193)
+win.sw_feed.switch.setChecked(True)
+win.sp_feed_interval.setValue(420)
+win.cb_food.setCurrentText("3")
+win.cb_water.setCurrentText("6")
 win._pull()
 win._save()
 
@@ -160,7 +164,34 @@ assert reloaded.drop.min_farm_s == 35, reloaded.drop.min_farm_s
 assert reloaded.hotkeys.toggle == "Ctrl+F5"
 assert reloaded.drop.filter_point == [277, 193]
 assert reloaded.drop.templates == win.cfg.drop.templates
+assert reloaded.auto_feed.enabled is True
+assert reloaded.auto_feed.interval_s == 420, reloaded.auto_feed.interval_s
+assert (reloaded.auto_feed.food_key,
+        reloaded.auto_feed.water_key) == ("3", "6")
 print("OK  every control round-trips through config.json")
+
+# ------------------------------------------- 5b) the auto-feed slots warn early
+# The engine refuses these when it arms; the card has to say so while they are
+# still being picked, not from a red line mid-session.
+win.cb_food.setCurrentText("5")
+win.cb_water.setCurrentText("5")
+win._pull()
+assert "would eat again" in win.feed_note.text(), win.feed_note.text()
+
+# the inventory key is "tab" from the round trip above, so put a slot on it
+win.ed_inv_key.setText("5")
+win.cb_water.setCurrentText("6")
+win._pull()
+assert "inventory key" in win.feed_note.text(), win.feed_note.text()
+
+win.ed_inv_key.setText("i")
+win.cb_food.setCurrentText("4")
+win.cb_water.setCurrentText("5")
+win._pull()
+assert "slot 4" in win.feed_note.text() and "slot 5" in win.feed_note.text()
+win.sw_feed.switch.setChecked(False)
+win._pull()
+print("OK  auto-feed flags a slot clash before the macro is ever armed")
 
 # ------------------------------------------------- 6) start guard
 win.sw_drop.switch.setChecked(True)

@@ -47,6 +47,9 @@ CAPTURE_DIR = ROOT / "captures"
 # fires a git fetch, and a farming session lasts hours, not seconds.
 AUTO_CHECK_MIN = 20
 
+# ARK's hotbar, in the order the keys sit on a keyboard
+HOTBAR = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+
 
 def spin(minimum, maximum, value, suffix="", step=1) -> QSpinBox:
     box = QSpinBox()
@@ -687,6 +690,42 @@ class MainWindow(QWidget):
         target.add(detect)
         lay.addWidget(target)
 
+        feed = Card(
+            "Auto-feed",
+            "Presses two hotbar slots on a timer so the character eats and "
+            "drinks without you. Put the food on one slot and a full waterskin "
+            "or canteen on the other.")
+        self.sw_feed = SwitchRow("Feed while farming", self.cfg.auto_feed.enabled)
+        feed.add(self.sw_feed)
+        fgrid = FormGrid(pairs=2)
+        self.sp_feed_interval = spin(30, 7200, self.cfg.auto_feed.interval_s,
+                                     " s", 30)
+        fgrid.add("Feed every", self.sp_feed_interval,
+                  "360 s is six minutes — often enough for the usual food and "
+                  "water drain")
+        self.sp_feed_gap = spin(50, 3000, self.cfg.auto_feed.gap_ms, " ms", 50)
+        fgrid.add("Gap between presses", self.sp_feed_gap,
+                  "So the game does not fold the two into one keystroke")
+        self.cb_food = combo(HOTBAR, HOTBAR.index(self.cfg.auto_feed.food_key)
+                             if self.cfg.auto_feed.food_key in HOTBAR else 3,
+                             width=124)
+        fgrid.add("Food slot", self.cb_food)
+        self.cb_water = combo(HOTBAR, HOTBAR.index(self.cfg.auto_feed.water_key)
+                              if self.cfg.auto_feed.water_key in HOTBAR else 4,
+                              width=124)
+        fgrid.add("Water slot", self.cb_water)
+        feed.add(fgrid)
+        self.feed_note = hint_label("")
+        feed.add(self.feed_note)
+        feed.add(hint_label(
+            "It fires from inside the farming loop, never during a drop pass: a "
+            "hotbar key sent while the search field has the keyboard would land "
+            "in the filter as a digit instead of reaching the hotbar. It also "
+            "waits while ARK is not in front, so the presses cannot go into "
+            "whatever you are doing instead. What it cannot do is see your food "
+            "bar — it presses the slot, and an empty slot presses nothing."))
+        lay.addWidget(feed)
+
         afk = Card("Anti-AFK",
                    "A cloud session gets dropped when it sees no input for a "
                    "while. This taps one key on a timer to keep it alive — "
@@ -714,6 +753,7 @@ class MainWindow(QWidget):
 
         lay.addWidget(self._updates_card())
         lay.addStretch(1)
+        self._sync_feed_note()
         self._sync_delivery_options(announce=False)
         self._sync_mode_note()
         self._sync_platform_note()
@@ -936,7 +976,8 @@ class MainWindow(QWidget):
             self.sw_dry.switch, self.sw_updates.switch,
             self.sw_auto_update.switch, self.cb_platform,
             self.sp_latency, self.sw_afk.switch, self.sp_afk_interval,
-            self.ed_afk_key,
+            self.ed_afk_key, self.sw_feed.switch, self.sp_feed_interval,
+            self.sp_feed_gap, self.cb_food, self.cb_water,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -995,6 +1036,14 @@ class MainWindow(QWidget):
         target.require_focus = self.sw_focus.switch.isChecked()
         target.start_delay_s = self.sp_delay.value()
         target.stream_latency_ms = self.sp_latency.value()
+
+        feed = self.cfg.auto_feed
+        feed.enabled = self.sw_feed.switch.isChecked()
+        feed.interval_s = self.sp_feed_interval.value()
+        feed.gap_ms = self.sp_feed_gap.value()
+        feed.food_key = self.cb_food.currentText()
+        feed.water_key = self.cb_water.currentText()
+        self._sync_feed_note()
 
         afk = self.cfg.anti_afk
         afk.enabled = self.sw_afk.switch.isChecked()
@@ -1089,6 +1138,30 @@ class MainWindow(QWidget):
     def _on_state(self, state: str) -> None:
         self._state = state
         self.titlebar.status.set_state(state)
+
+    # ------------------------------------------------------------ auto feeding
+    def _sync_feed_note(self) -> None:
+        """
+        Say what is wrong with the two slots while it is still being set up.
+
+        The engine refuses the same cases when it arms, but finding out then
+        means finding out from a red line in the log, mid-session.
+        """
+        feed = self.cfg.auto_feed
+        if feed.food_key == feed.water_key:
+            self.feed_note.setText(
+                f"Food and water are both on slot {feed.food_key} — the second "
+                "press would eat again instead of drinking. Auto-feed will "
+                "refuse to arm.")
+        elif self.cfg.drop.inventory_key in (feed.food_key, feed.water_key):
+            self.feed_note.setText(
+                f"Slot {self.cfg.drop.inventory_key} is also your inventory key "
+                "— that press would open the panel while the macro is farming. "
+                "Auto-feed will refuse to arm.")
+        else:
+            self.feed_note.setText(
+                f"Eats from slot {feed.food_key}, drinks from slot "
+                f"{feed.water_key}, every {feed.interval_s}s.")
 
     # --------------------------------------------------------- auto updating
     def _sync_auto_update(self) -> None:

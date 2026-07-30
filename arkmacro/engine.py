@@ -299,6 +299,41 @@ class MacroEngine(QThread):
             self.log.emit(f"inventory closed with {other}", "ok")
         return True
 
+    # --------------------------------------------------------- auto feeding
+    def _feed_problem(self) -> str:
+        """Why auto-feed cannot run, or "" when it can."""
+        f = self.cfg.auto_feed
+        for label, key in (("food", f.food_key), ("water", f.water_key)):
+            if w.vk_from_name(key) is None:
+                return f'the {label} key "{key}" is not a key name'
+        if f.food_key == f.water_key:
+            return (f'food and water are both on slot "{f.food_key}" — the '
+                    "second press would eat again instead of drinking")
+        # a feed key that is also the inventory key would open the panel in the
+        # middle of a farming stretch, and the macro would carry on clicking
+        # inside it
+        if self.cfg.drop.inventory_key in (f.food_key, f.water_key):
+            return (f'"{self.cfg.drop.inventory_key}" is the inventory key — '
+                    "pick different hotbar slots for food and water")
+        return ""
+
+    def _feed(self) -> bool:
+        """
+        One press for food, one for water. False if a stop came in between.
+
+        Only ever called from the main loop, between two clicks and never inside
+        a drop pass: a hotbar key sent while the search field has the keyboard
+        would land in the filter as a digit instead of reaching the hotbar.
+        """
+        f = self.cfg.auto_feed
+        self.log.emit(f"auto-feed: slot {f.food_key} then slot {f.water_key}",
+                      "info")
+        self._tap_key(f.food_key)
+        if not self._wait(f.gap_ms):
+            return False
+        self._tap_key(f.water_key)
+        return self._wait(f.gap_ms)
+
     # ------------------------------------------------------- drop routine
     def _run_drop(self) -> None:
         d = self.cfg.drop
@@ -466,10 +501,23 @@ class MacroEngine(QThread):
                 self.state_changed.emit("idle")
                 return
 
+        feed_ok = cfg.auto_feed.enabled
+        if feed_ok:
+            problem = self._feed_problem()
+            if problem:
+                feed_ok = False
+                self.log.emit(f"auto-feed off for this run: {problem}", "err")
+            else:
+                self.log.emit(
+                    f"auto-feed armed: slots {cfg.auto_feed.food_key} and "
+                    f"{cfg.auto_feed.water_key} every "
+                    f"{cfg.auto_feed.interval_s}s", "ok")
+
         self.state_changed.emit("farming")
         self.log.emit("macro armed", "ok")
 
         last_drop = time.perf_counter()
+        last_feed = time.perf_counter()
         clicks_since_drop = 0
         paused_reason = ""
 
@@ -518,6 +566,17 @@ class MacroEngine(QThread):
                 paused_reason = ""
                 self.log.emit("target back — resuming", "ok")
                 self.state_changed.emit("farming")
+
+            # Feeding sits here on purpose, and nowhere else: past the focus
+            # gate, so the keys cannot land in another window, and outside the
+            # drop pass above, which runs to completion before this line is ever
+            # reached. A timer on the UI thread could fire while the filter has
+            # the keyboard and type a digit into the search box.
+            if feed_ok and (time.perf_counter() - last_feed
+                            >= cfg.auto_feed.interval_s):
+                if not self._feed():
+                    break
+                last_feed = time.perf_counter()
 
             # autoclick
             started = time.perf_counter()

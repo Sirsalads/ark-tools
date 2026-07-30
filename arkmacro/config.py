@@ -93,6 +93,24 @@ class AntiAfk:
 
 
 @dataclass
+class AutoFeed:
+    """
+    Eats and drinks from the hotbar on a timer, while farming.
+
+    Two slots, because food and water are two items. The keys are hotbar slots
+    (1-0) rather than free text: a stray letter here would be a key bound to
+    something in ARK, and a stray "i" would open the inventory mid-farm.
+    """
+
+    enabled: bool = False
+    interval_s: int = 360           # every 6 minutes
+    food_key: str = "4"
+    water_key: str = "5"
+    # between the two presses, so the game does not fold them into one
+    gap_ms: int = 350
+
+
+@dataclass
 class App:
     check_updates_on_start: bool = True
     # pull and restart without being asked, so a new commit reaches the running
@@ -112,6 +130,7 @@ class Config:
     hotkeys: Hotkeys = field(default_factory=Hotkeys)
     target: Target = field(default_factory=Target)
     anti_afk: AntiAfk = field(default_factory=AntiAfk)
+    auto_feed: AutoFeed = field(default_factory=AutoFeed)
     app: App = field(default_factory=App)
 
     # -------------------------------------------------------------- io
@@ -230,6 +249,14 @@ def _sanitize(cfg: "Config") -> None:
     # anything that is not plainly off leaves the check on: the failure it
     # guards against costs the whole inventory
     drop.verify_filter = bool(drop.verify_filter)
+
+    feed = cfg.auto_feed
+    # a 5 s feed timer would spend the session eating; a hand-edited one is
+    # clamped rather than trusted
+    feed.interval_s = _count(feed.interval_s, 360, 30, 7200)
+    feed.gap_ms = _count(feed.gap_ms, 350, 50, 3000)
+    feed.food_key = str(feed.food_key).strip().lower()
+    feed.water_key = str(feed.water_key).strip().lower()
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

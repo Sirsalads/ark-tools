@@ -267,6 +267,48 @@ later. Switching the profile does three things:
 **Recapture your points after switching.** Background delivery is **greyed out**
 on this profile — see below.
 
+## Auto-feed
+
+**Settings → Auto-feed.** Presses two hotbar slots on a timer so the character
+eats and drinks while the macro farms. Food on one slot, a full waterskin or
+canteen on the other; **every 6 minutes** by default, slots **4** and **5**.
+
+Where it fires is the whole design, and it is not a detail:
+
+> A hotbar key sent while the search field has the keyboard **types a digit into
+> the filter** instead of reaching the hotbar. `thatch` becomes `thatch4`, which
+> matches nothing.
+
+So auto-feed runs from **inside the farming loop**, at the one point where that
+cannot happen — past the focus gate and outside the drop pass, which runs to
+completion before the feed line is ever reached. It is not a timer on the UI
+thread, which is exactly what would let it fire mid-typing. (Anti-AFK *is* such
+a timer, and that is safe only because F15 is a key ARK has nothing bound to.)
+
+Two consequences of the same placement:
+
+- while ARK is not in front the macro is paused, so the presses **cannot go into
+  whatever you are doing** instead;
+- a feed never overlaps a drop pass in either direction — no half-open inventory,
+  no digit in the filter.
+
+The two slots are picked from a **dropdown of 1–0**, not typed. Free text there
+is how you end up with a key that is bound to something in ARK. Two cases are
+refused outright, in the card while you are setting it up and again in the log
+if it arms anyway:
+
+- **the same slot twice** — the second press would eat again instead of drinking;
+- **a slot that is also your inventory key** — that press would open the panel in
+  the middle of a farming stretch, and the macro would carry on clicking inside
+  it.
+
+Either way only auto-feed is switched off; the farm carries on.
+
+What it cannot do is **see your food bar**. It presses the slot; an empty slot
+presses nothing, and nothing in the log will say so. Keep the stack topped up,
+and remember `raw meat` or `cooked` as a drop keyword would throw away the very
+food this is pressing — the drop list and the feed slots have to agree.
+
 ## Anti-AFK
 
 **Settings → Anti-AFK.** Taps one key on a timer so a cloud session is not

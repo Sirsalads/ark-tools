@@ -39,11 +39,14 @@ def pump(seconds: float) -> None:
 class FakeW:
     """Stands in for arkmacro.engine.w, recording what would be sent."""
 
-    VK = {"i": 0x49, "esc": 0x1B, "backspace": 0x08}
+    VK = {"i": 0x49, "esc": 0x1B, "backspace": 0x08,
+          "4": 0x34, "5": 0x35, "9": 0x39}
 
+    # None for an unknown name, exactly like the real one: a fallback code here
+    # would hide every "that is not a key" check from the tests
     @staticmethod
     def vk_from_name(name):
-        return FakeW.VK.get(name, 0x41)
+        return FakeW.VK.get(name)
 
     @staticmethod
     def find_window(_fragment):
@@ -389,6 +392,98 @@ timer_engine.request_stop()
 timer_engine.wait(3000)
 assert any(c == ("click_at", 1400, 900) for c in calls), "timer trigger failed"
 print("OK  timer trigger")
+
+# ------------------------------------------------- 5b) auto-feed
+# The hazard this has to avoid: a hotbar key pressed while the search field
+# holds the keyboard types a digit into the filter instead of reaching the
+# hotbar. So feeding lives in the farming loop, never inside a drop pass.
+FOOD, WATER = hex(0x34), hex(0x35)
+
+
+class Watcher:
+    """Records the keys, and flags any feed press sent with the panel open."""
+
+    def __init__(self) -> None:
+        self.in_panel = False
+        self.violations: list[str] = []
+
+    def tap(self, vk, hold=0.0):
+        key = hex(vk)
+        calls.append(("key", key))
+        if key in (FOOD, WATER) and self.in_panel:
+            self.violations.append(key)
+        if vk == 0x49:                  # the inventory key opened the panel
+            self.in_panel = True
+        elif vk == 0x1B:                # esc closed it again
+            self.in_panel = False
+
+
+calls.clear()
+cfg.drop.trigger = "interval"
+cfg.drop.interval_s = 1
+cfg.auto_feed.enabled = True
+cfg.auto_feed.interval_s = 0            # feed on every pass through the loop
+cfg.auto_feed.gap_ms = 10
+watcher = Watcher()
+original_tap = FakeW.tap
+FakeW.tap = watcher.tap
+try:
+    fed = eng.MacroEngine(cfg)
+    fed.log.connect(lambda _m, _l: None)
+    fed.start()
+    pump(2.6)
+    fed.request_stop()
+    fed.wait(3000)
+finally:
+    FakeW.tap = original_tap
+
+pairs = [i for i, c in enumerate(calls) if c == ("key", FOOD)]
+assert pairs, "auto-feed never fired"
+# food first, water straight after, every time
+for index in pairs:
+    assert calls[index + 1] == ("key", WATER), calls[index:index + 3]
+assert not watcher.violations, \
+    f"a hotbar key was sent with the inventory open: {watcher.violations}"
+assert any(c == ("click_at", 1400, 900) for c in calls), \
+    "feeding starved the drop pass"
+print(f"OK  auto-feed presses both slots ({len(pairs)}x) and never mid-pass")
+
+# ------------------------- 5c) slots that would misfire refuse to arm
+for food, water, inv, why in (
+    ("4", "4", "i", "the same slot twice"),
+    ("i", "5", "i", "the inventory key as a slot"),
+    ("nonsense", "5", "i", "a key name that does not exist"),
+):
+    cfg.auto_feed.food_key, cfg.auto_feed.water_key = food, water
+    cfg.drop.inventory_key = inv
+    picky = eng.MacroEngine(cfg)
+    assert picky._feed_problem(), f"accepted {why}"
+
+cfg.auto_feed.food_key, cfg.auto_feed.water_key = "4", "5"
+cfg.drop.inventory_key = "i"
+assert not eng.MacroEngine(cfg)._feed_problem(), "rejected a sane pair of slots"
+
+# and a bad pair takes auto-feed out without taking the farm down with it.
+# The drop is off here so the only thing that could press "i" is the feed.
+cfg.auto_feed.food_key = "i"
+cfg.drop.enabled = False
+calls.clear()
+refused = eng.MacroEngine(cfg)
+levels: list[str] = []
+refused.log.connect(lambda _m, level: levels.append(level))
+refused.start()
+pump(0.8)
+refused.request_stop()
+refused.wait(3000)
+app.processEvents()
+assert "err" in levels, "no error for a feed key that opens the inventory"
+assert not any(c == ("key", hex(0x49)) for c in calls), \
+    "the refused feed key was pressed anyway and opened the inventory"
+assert sum(1 for c in calls if c[0] == "click") > 0, "it stopped farming too"
+cfg.auto_feed.food_key = "4"
+cfg.auto_feed.enabled = False
+cfg.drop.enabled = True
+print("OK  unusable feed slots are refused, and the farm carries on")
 
 # ------------------------------------------------- 6) hotkey parsing
 assert parse("F6")[1] == 0x75
