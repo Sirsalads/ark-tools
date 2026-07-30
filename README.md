@@ -280,24 +280,28 @@ The key is only ever **watched**, with `GetAsyncKeyState`, never registered:
 > Bind the drop key that way and your own press would stop reaching ARK — the
 > cursor would tour the slots and drop nothing at all.
 
-### Two ways to run it
+### Three ways to run it
 
-| How it runs | What happens | Who presses the key |
+Two keys, same split as skin overcap: **Start it with** is yours and only tells
+the app to go, and the **Drop key** is the game's instruction.
+
+| How it runs | What you do | Who sends the drop key |
 |---|---|---|
-| **Hold the key** | Sweeps while you hold it, stops within one slot of letting go | **You.** The app sends nothing — your finger is what tells ARK to drop |
-| **Press to start and stop** | One press starts it, another stops it | **The app**, once per slot |
+| **Press to start and stop** (default) | Press `F3`, press it again when done | The macro, once per slot |
+| **Hold the activation key** | Hold `F3` | The macro, once per slot |
+| **Hold the drop key yourself** | Hold `O` | **You.** The app sends nothing |
 
-That second column is the part worth understanding. In hold mode your finger
-keeps ARK dropping, so the app only has to move the mouse. The moment you *let
-go* — which is exactly what toggling means — ARK stops receiving the key, and a
-sweep that only moved the cursor would tour the slots and drop **nothing**. So in
-toggle mode the app taps the key itself on every slot, after the cursor has
-rested there a full dwell.
+The first two leave your hands free, which is the point of a separate activation
+key. The third is the original behaviour, kept because it works: there the key
+you hold *is* the instruction, so your finger does both jobs and there is nothing
+for the app to send — a press on top of yours would be a second drop.
 
-One consequence of watching rather than swallowing: **the press that starts a
-toggled sweep also reaches ARK**, so it drops whatever the cursor is on at that
-moment. Same for the press that stops it — by then the cursor is inside the block
-anyway.
+Setting the activation key **to the drop key** is refused: pressing the very key
+the macro is supposed to send is a circle. Use the third mode if that is what you
+meant.
+
+One consequence of the key being watched rather than swallowed: **the activation
+press also reaches ARK**, so pick something the game has nothing bound to.
 
 ### Selecting the area
 
@@ -324,8 +328,8 @@ would drop those too.
   moves items around; the sweep would be the least of the damage. Stop the macro
   first — it says so in the log.
 - **Keep sweeping once ARK is no longer in front.** It stops on the spot. This
-  matters most when toggling: there is no key being held to release, so focus is
-  the only thing between a running sweep and somebody else's window.
+  matters most when toggling: nothing is being held, so focus is the only thing
+  between a running sweep and somebody else's window.
 - **Start over the frozen picker.**
 - **Watch a key that does not exist.** A typo in the field disarms the watcher
   instead of polling nothing forever.
@@ -394,10 +398,11 @@ matter beyond that.
 **Hold-to-drop and skin overcap never run at the same time.** There is one
 cursor, so whichever one is already sweeping keeps it until it stops.
 
-Hold-to-drop does not have a separate activation key, and does not need one: the
-key you hold there **is** the game's instruction, so your finger is doing both
-jobs at once. Skin overcap is the opposite — the instruction is a chord you
-should not have to hold, which is exactly why the two keys are split.
+Both have the same split for the same reason: **the key you press to start a
+macro is not the key the macro is there to send.** Hold-to-drop keeps a third
+mode where the two coincide, because there the instruction is a single key your
+finger can hold; skin overcap has no such mode, because holding Shift + a slot to
+start a macro that holds Shift + a slot is a circle with no way out.
 
 ## Auto-feed
 

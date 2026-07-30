@@ -605,6 +605,25 @@ assert survivor.drop.close_wait_ms == 1200, "clobbered a chosen wait"
 kept.unlink()
 print("OK  an old config moves onto the double close and the click trigger")
 
+# ------------------- 8c) hold-to-drop before the activation key existed
+# "hold" used to mean holding the drop key itself; it means holding a separate
+# activation key now. A config written before the split has to keep behaving
+# the way its owner set it up, not silently start sending the drop key.
+split = pathlib.Path(tempfile.gettempdir()) / "ark_macro_hold_split.json"
+split.write_text(json.dumps({"hold_drop": {"mode": "hold", "key": "o"}}),
+                 encoding="utf-8")
+assert Config.load(split).hold_drop.mode == "manual"
+# one that was already toggling was already having its drop key sent for it
+split.write_text(json.dumps({"hold_drop": {"mode": "toggle"}}), encoding="utf-8")
+assert Config.load(split).hold_drop.mode == "toggle"
+# and a config written after the split is left alone
+split.write_text(json.dumps({"hold_drop": {"mode": "hold",
+                                           "activate_key": "f3"}}),
+                 encoding="utf-8")
+assert Config.load(split).hold_drop.mode == "hold"
+split.unlink()
+print("OK  a hold-to-drop config from before the split keeps its behaviour")
+
 # ------------------------------------------------- 9) preset risk flags
 assert presets.risk_of("stone")[0] == "high"
 assert presets.risk_of("flint")[0] == "ok"

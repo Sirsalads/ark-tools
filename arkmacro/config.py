@@ -103,12 +103,14 @@ class HoldDrop:
     """
 
     enabled: bool = False
-    key: str = "o"
-    # hold   -> sweep while the key is held; your finger keeps ARK dropping
-    # toggle -> one press starts, another stops. Nobody is holding the key then,
-    #           so the app taps it once per slot: a cursor tour with no key down
-    #           drops nothing at all
-    mode: str = "hold"
+    key: str = "o"                  # ARK's drop key: the instruction
+    activate_key: str = "f3"        # yours, to start and stop the macro
+    # toggle -> press the activation key to start, again to stop. Hands free,
+    #           and the macro taps the drop key once per slot
+    # hold   -> the same, but only while the activation key is held
+    # manual -> no activation key: you hold the drop key itself, and the app
+    #           sends nothing because your finger is already the instruction
+    mode: str = "toggle"
     area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # x,y,w,h
     # screen size when the area was selected, used to rescale it later
     area_resolution: list[int] = field(default_factory=lambda: [0, 0])
@@ -244,6 +246,14 @@ def _migrate(cfg: "Config", raw: dict) -> None:
         if drop.get("close_wait_ms", 700) == 700:
             cfg.drop.close_wait_ms = 2000
 
+    # hold-to-drop used to have no activation key, so its "hold" meant holding
+    # the drop key itself. That is "manual" now, and a config written before the
+    # split has to keep behaving the way its owner set it up.
+    held = raw.get("hold_drop")
+    if isinstance(held, dict) and "activate_key" not in held:
+        if held.get("mode", "hold") == "hold":
+            cfg.hold_drop.mode = "manual"
+
     legacy = drop.get("keywords")
     if legacy and "templates" not in drop:
         cfg.drop.templates = [
@@ -328,10 +338,11 @@ def _sanitize(cfg: "Config") -> None:
     hold.rows = _count(hold.rows, 5, 1, 20)
     hold.dwell_ms = _count(hold.dwell_ms, 40, 5, 1000)
     hold.key = str(hold.key).strip().lower()
-    # anything unrecognised falls back to holding, the mode where the app sends
+    hold.activate_key = str(hold.activate_key).strip().lower()
+    # anything unrecognised falls back to manual, the mode where the app sends
     # no keys of its own
-    hold.mode = ("toggle" if str(hold.mode).strip().lower() == "toggle"
-                 else "hold")
+    mode = str(hold.mode).strip().lower()
+    hold.mode = mode if mode in ("toggle", "hold", "manual") else "manual"
 
     skin = cfg.skin_overcap
     skin.area = _rect(skin.area)

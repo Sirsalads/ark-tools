@@ -51,6 +51,9 @@ AUTO_CHECK_MIN = 20
 # ARK's hotbar, in the order the keys sit on a keyboard
 HOTBAR = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
+# hold-to-drop run modes, in the order the combo lists them
+HOLD_MODES = ["toggle", "hold", "manual"]
+
 
 def spin(minimum, maximum, value, suffix="", step=1) -> QSpinBox:
     box = QSpinBox()
@@ -688,8 +691,10 @@ class MainWindow(QWidget):
         card.add(self.sw_hold)
 
         hgrid = FormGrid(pairs=2)
-        self.cb_hold_mode = combo(["Hold the key", "Press to start and stop"],
-                                  1 if hold.mode == "toggle" else 0, width=230)
+        self.cb_hold_mode = combo(["Press to start and stop",
+                                   "Hold the activation key",
+                                   "Hold the drop key yourself"],
+                                  HOLD_MODES.index(hold.mode), width=230)
         self.cb_hold_mode.currentIndexChanged.connect(self._sync_hold_mode_note)
         hgrid.add("How it runs", self.cb_hold_mode)
         hgrid.skip()
@@ -698,6 +703,13 @@ class MainWindow(QWidget):
         card.add(self.hold_mode_note)
 
         hgrid = FormGrid(pairs=2)
+        self.ed_hold_activate = QLineEdit(hold.activate_key)
+        self.ed_hold_activate.setMaxLength(10)
+        self.ed_hold_activate.setFixedWidth(124)
+        self.ed_hold_activate.setAlignment(Qt.AlignCenter)
+        hgrid.add("Start it with", self.ed_hold_activate,
+                  "Yours, not the game's. Unused in the third mode, where your "
+                  "finger on the drop key is the trigger")
         self.ed_hold_key = QLineEdit(hold.key)
         self.ed_hold_key.setMaxLength(10)
         self.ed_hold_key.setFixedWidth(124)
@@ -738,18 +750,24 @@ class MainWindow(QWidget):
         return card
 
     def _sync_hold_mode_note(self) -> None:
-        if self.cb_hold_mode.currentIndex() == 1:
+        mode = HOLD_MODES[max(self.cb_hold_mode.currentIndex(), 0)]
+        drop_key = (self.ed_hold_key.text().strip() or "o").upper()
+        start = (self.ed_hold_activate.text().strip() or "f3").upper()
+        if mode == "manual":
             self.hold_mode_note.setText(
-                "One press starts the sweep, another stops it. Your finger is "
-                "off the key, so the app taps it once per slot — without that a "
-                "toggled sweep would tour the slots and drop nothing. The press "
-                "that starts it also reaches ARK, so it drops whatever the "
-                "cursor is on at that moment.")
+                f"No activation key: you hold «{drop_key}» yourself and the "
+                "sweep runs until you let go. The app sends no keys at all "
+                "here — your finger is the instruction.")
+        elif mode == "hold":
+            self.hold_mode_note.setText(
+                f"The sweep runs while you hold «{start}», and the macro taps "
+                f"«{drop_key}» once per slot. Two different keys: the one you "
+                "hold is the app's, the drop key is the game's.")
         else:
             self.hold_mode_note.setText(
-                "The sweep runs while you hold the key and stops within one "
-                "slot of letting go. The app sends no keys at all here — your "
-                "finger is what tells ARK to drop.")
+                f"One press of «{start}» starts the sweep, another stops it, "
+                f"and the macro taps «{drop_key}» once per slot. Hands free — "
+                "this is the mode to use if you do not want to hold anything.")
 
     def _point_card(self, title: str, subtitle: str, point: list[int], key: str):
         card = Card(title, subtitle)
@@ -1146,6 +1164,7 @@ class MainWindow(QWidget):
             self.sp_feed_gap, self.cb_food, self.cb_water,
             self.sw_hold.switch, self.ed_hold_key, self.sp_hold_cols,
             self.sp_hold_rows, self.sp_hold_dwell, self.cb_hold_mode,
+            self.ed_hold_activate,
             self.sw_skin.switch, self.cb_skin_key, self.sp_skin_stops,
             self.sp_skin_dwell, self.ed_skin_activate, self.cb_skin_mode,
         ]
@@ -1210,7 +1229,8 @@ class MainWindow(QWidget):
         hold = self.cfg.hold_drop
         hold.enabled = self.sw_hold.switch.isChecked()
         hold.key = self.ed_hold_key.text().strip().lower() or "o"
-        hold.mode = "toggle" if self.cb_hold_mode.currentIndex() == 1 else "hold"
+        hold.activate_key = self.ed_hold_activate.text().strip().lower() or "f3"
+        hold.mode = HOLD_MODES[max(self.cb_hold_mode.currentIndex(), 0)]
         hold.columns = self.sp_hold_cols.value()
         hold.rows = self.sp_hold_rows.value()
         hold.dwell_ms = self.sp_hold_dwell.value()
@@ -1367,9 +1387,11 @@ class MainWindow(QWidget):
         pace = slots * hold.dwell_ms / 1000.0
         res = hold.area_resolution
         where = f", captured at {res[0]}x{res[1]}" if res and all(res) else ""
-        driven = (f"a press of «{hold.key.upper()}» starts it, another stops it"
-                  if hold.mode == "toggle"
-                  else f"it loops while «{hold.key.upper()}» is held")
+        driven = {
+            "toggle": f"«{hold.activate_key.upper()}» starts and stops it",
+            "hold": f"it loops while «{hold.activate_key.upper()}» is held",
+            "manual": f"it loops while «{hold.key.upper()}» is held",
+        }[hold.mode]
         self.lbl_hold_area.setText(
             f"{width}x{height} px at ({x}, {y}){where} — {hold.columns}x"
             f"{hold.rows} = {slots} slots, about {pace:.1f}s per lap, and "
@@ -1417,25 +1439,43 @@ class MainWindow(QWidget):
             return False
         return w.is_foreground(w.find_window(self.cfg.target.window_title))
 
+    def _hold_problem(self) -> str:
+        """Why hold-to-drop cannot run, or "" when it can."""
+        hold = self.cfg.hold_drop
+        if w.vk_from_name(hold.key) is None:
+            return f'the drop key "{hold.key}" is not a key name'
+        if hold.mode == "manual":
+            return ""
+        if w.vk_from_name(hold.activate_key) is None:
+            return f'the activation key "{hold.activate_key}" is not a key name'
+        if hold.activate_key == hold.key:
+            return ("the activation key is the drop key — pick a different one, "
+                    "or switch to holding the drop key yourself")
+        return ""
+
     def _watch_hold_key(self) -> None:
         """
-        Drive the sweep from the drop key.
+        Drive the sweep from whichever key the mode says is in charge.
 
-        Holding reads the key's level; toggling reads its edge, so the press is
-        acted on once and the release means nothing.
+        Manual watches the drop key itself, the way a finger on it would. The
+        other two watch the activation key, which belongs to the app: holding
+        reads its level, pressing reads its edge, so the press is acted on once
+        and the release means nothing.
         """
         hold = self.cfg.hold_drop
         if not (hold.enabled and sweep.usable(hold.area)):
             return
         if self._sweep_kind == "skin":
             return
-        vk = w.vk_from_name(hold.key)
-        if vk is None:
-            self._log(f'hold-to-drop: "{hold.key}" is not a key name', "err")
+        problem = self._hold_problem()
+        if problem:
+            self._log(f"hold-to-drop off: {problem}", "err")
             # switch the feature off rather than stop the timer: the watcher is
             # shared, and skin overcap may still be using it
             self.sw_hold.switch.setChecked(False)
             return
+        vk = w.vk_from_name(hold.key if hold.mode == "manual"
+                            else hold.activate_key)
         down = w.key_is_down(vk)
         pressed = down and not self._hold_was_down
         self._hold_was_down = down
@@ -1517,8 +1557,9 @@ class MainWindow(QWidget):
         if not path:
             return
         self._sweep_kind = "drop"
-        how = ("press again to stop" if hold.mode == "toggle"
-               else "while the key is held")
+        how = {"toggle": "press again to stop",
+               "hold": f"while {hold.activate_key.upper()} is held",
+               "manual": f"while {hold.key.upper()} is held"}[hold.mode]
         self._begin_sweep(path, hold.dwell_ms,
                           f"hold-to-drop: sweeping {len(path)} slots, {how}")
 
@@ -1575,10 +1616,9 @@ class MainWindow(QWidget):
         """
         One stop per tick, looping, until it is told to stop.
 
-        The key is pressed here only when hold-to-drop is toggling. Whenever a
-        key is *held* — either feature — there is nothing to send: the player's
-        own fingers are already telling ARK what to do, and a press on top of
-        that would be a second one.
+        The drop key is sent here in every mode but manual. Manual is the one
+        where a finger is already on it, and a press on top of that would be a
+        second drop.
         """
         if not self._sweep_path:
             self._stop_sweep()
@@ -1593,15 +1633,18 @@ class MainWindow(QWidget):
             return
         # re-checked here and not only on the watch timer: this runs far more
         # often, so the sweep stops within one slot of the key being released
-        if hold.mode == "hold" and not w.key_is_down(vk):
-            self._stop_sweep()
-            return
-        # in either mode, a game that is no longer in front means the cursor and
+        if hold.mode in ("hold", "manual"):
+            watched = w.vk_from_name(hold.key if hold.mode == "manual"
+                                     else hold.activate_key)
+            if watched is None or not w.key_is_down(watched):
+                self._stop_sweep()
+                return
+        # in every mode, a game that is no longer in front means the cursor and
         # the presses are landing in somebody else's window
         if not w.is_foreground(self._sweep_hwnd):
             self._stop_sweep()
             return
-        if hold.mode == "toggle":
+        if hold.mode != "manual":
             # The cursor has been resting on this slot for a full dwell. The
             # press is held for a third of that and never more than 25 ms: this
             # runs on the UI thread, so a hold as long as the tick would stall

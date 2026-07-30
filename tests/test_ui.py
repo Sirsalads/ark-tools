@@ -568,9 +568,11 @@ win._pull()
 assert not win._hold_watch.isActive(), "armed without an area"
 assert "No area selected" in win.lbl_hold_area.text()
 
-# with an area, the watcher runs — but only the key starts a sweep
+# with an area, the watcher runs — but only the key starts a sweep.
+# Manual is the mode where your own finger holds the drop key.
 win.cfg.hold_drop.area = [100, 200, 240, 200]
 win.cfg.hold_drop.area_resolution = list(w_module.screen_size())
+win.cb_hold_mode.setCurrentIndex(2)         # hold the drop key yourself
 win.ed_hold_key.setText("o")
 win.sp_hold_cols.setValue(4)
 win.sp_hold_rows.setValue(4)
@@ -594,7 +596,7 @@ assert len(moves) == 17, f"{len(moves)} moves for the start plus 16 ticks"
 assert moves[:4] == [(130, 225), (190, 225), (250, 225), (310, 225)], moves[:4]
 # and it loops: slot 17 is slot 1 again
 assert moves[16] == moves[0], "the sweep stopped instead of looping"
-# holding sends no keys at all — the player's own finger is what drops
+# manual sends no keys at all — the player's own finger is what drops
 assert taps == [], f"pressed the key while the player was holding it: {taps}"
 
 # key up: it stops within one slot and puts the pointer back
@@ -602,16 +604,20 @@ held["down"] = False
 win._sweep_step()
 assert not win._sweep_timer.isActive(), "kept sweeping after the key came up"
 assert moves[-1] == (7, 9), f"the cursor was left on a slot: {moves[-1]}"
-print("OK  hold-to-drop sweeps while the key is held, and loops")
+print("OK  hold-to-drop sweeps while the drop key is held, and loops")
 
 # ------------------------- 22a) toggle mode: press on, press off
-win.cb_hold_mode.setCurrentIndex(1)         # press to start and stop
+# A separate activation key, so nothing has to be held. The macro is what taps
+# the drop key now.
+win.cb_hold_mode.setCurrentIndex(0)         # press to start and stop
+win.ed_hold_activate.setText("f3")
 win._pull()
 moves.clear()
 taps.clear()
-assert "another stops it" in win.lbl_hold_area.text(), win.lbl_hold_area.text()
+assert "«F3» starts and stops it" in win.lbl_hold_area.text(), \
+    win.lbl_hold_area.text()
 
-# the key going down is a press; holding it down is not another one
+# the activation key going down is a press; holding it is not another one
 held["down"] = True
 win._watch_hold_key()
 assert win._sweep_timer.isActive(), "the press did not start the sweep"
@@ -625,9 +631,9 @@ for _ in range(4):
     win._watch_hold_key()
     win._sweep_step()
 assert win._sweep_timer.isActive(), "letting go stopped a toggled sweep"
-# and because nobody is holding the key, the app has to send it itself
+# and because nobody is holding the drop key, the macro has to send it itself
 assert len(taps) == 4, f"a toggled sweep sent {len(taps)} presses for 4 slots"
-assert set(taps) == {0x4F}, taps
+assert set(taps) == {0x4F}, f"it tapped something other than the drop key: {taps}"
 
 # the press is short next to the tick: it runs on the UI thread, so a hold as
 # long as the dwell would stall the window and stack the timers up
@@ -661,7 +667,7 @@ w_module.is_foreground = lambda _h: False
 win._sweep_step()
 assert not win._sweep_timer.isActive(), "kept sweeping after ARK lost focus"
 w_module.is_foreground = lambda _h: True
-win.cb_hold_mode.setCurrentIndex(0)
+win.cb_hold_mode.setCurrentIndex(2)         # back to holding the drop key
 win._pull()
 print("OK  a toggled sweep gives up when the game is no longer in front")
 
@@ -693,6 +699,20 @@ win._picking = True
 win._watch_hold_key()
 assert not win._sweep_timer.isActive(), "swept while picking"
 win._picking = False
+
+# the activation key cannot be the drop key: pressing the thing the macro is
+# supposed to send is the circle this whole split exists to avoid
+win.cb_hold_mode.setCurrentIndex(0)
+win.ed_hold_activate.setText("o")
+win._pull()
+win._watch_hold_key()
+assert not win._sweep_timer.isActive(), "ran with the activation key as the "\
+    "drop key"
+assert not win.sw_hold.switch.isChecked(), "a circular bind was left armed"
+win.ed_hold_activate.setText("f3")
+win.sw_hold.switch.setChecked(True)
+win.cb_hold_mode.setCurrentIndex(2)
+win._pull()
 
 # a key name that does not exist disarms instead of watching nothing forever
 win.ed_hold_key.setText("not-a-key")
