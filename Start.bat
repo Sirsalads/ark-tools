@@ -1,5 +1,5 @@
 @echo off
-rem  A.N.S Tools — double-click this.
+rem  A.N.S Tools - double-click this.
 rem
 rem  Nothing has to be installed first. The bootstrap finds a Python if the
 rem  machine has one, installs a private copy inside this folder if it does not,

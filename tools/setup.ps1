@@ -33,7 +33,7 @@ $Requirements = Join-Path $Root 'requirements.txt'
 $Stamp = Join-Path $Venv '.requirements-hash'
 
 # The app needs 3.10+. This is what gets installed when the machine has nothing
-# usable — a version with a long support window and wheels for everything.
+# usable - a version with a long support window and wheels for everything.
 $MinVersion = [Version]'3.10'
 $PythonVersion = '3.12.8'
 $InstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
@@ -81,13 +81,13 @@ function Find-Python {
 }
 
 function Install-Python {
-    Write-Step "No Python $MinVersion or newer found — installing $PythonVersion privately"
+    Write-Step "No Python $MinVersion or newer found - installing $PythonVersion privately"
     Write-Note "into $LocalPython (no administrator rights, nothing added to PATH)"
     $installer = Join-Path $env:TEMP "python-$PythonVersion-amd64.exe"
     try {
         Invoke-WebRequest -Uri $InstallerUrl -OutFile $installer -UseBasicParsing
     } catch {
-        throw "could not download Python from $InstallerUrl — $($_.Exception.Message)"
+        throw "could not download Python from $InstallerUrl - $($_.Exception.Message)"
     }
     # per-user, private target, no PATH changes, no launcher: this install
     # belongs to the app folder and leaves the machine as it found it
@@ -135,7 +135,7 @@ function Install-Dependencies {
         Write-Note "dependencies already installed"
         return
     }
-    Write-Step "Installing dependencies (once — this takes a minute)"
+    Write-Step "Installing dependencies (once - this takes a minute)"
     & $VenvPython -m pip install --upgrade pip --disable-pip-version-check --quiet
     & $VenvPython -m pip install --disable-pip-version-check --quiet -r $Requirements
     if ($LASTEXITCODE -ne 0) { throw "pip could not install $Requirements" }
@@ -153,7 +153,7 @@ if ($python) {
     Write-Step "Python $($python.Version) found"
     Write-Note $python.Path
 } elseif ($CheckOnly) {
-    Write-Bad "no usable Python — a normal start would install one privately"
+    Write-Bad "no usable Python - a normal start would install one privately"
 } else {
     $python = Install-Python
     Write-Step "Python $($python.Version) installed"
@@ -163,11 +163,11 @@ if ($CheckOnly) {
     if (Test-Path -LiteralPath $VenvPython) {
         & $VenvPython -c "import PySide6;print('    PySide6', PySide6.__version__)"
     } else {
-        Write-Bad "no package folder yet — a normal start would create one"
+        Write-Bad "no package folder yet - a normal start would create one"
     }
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($git) { Write-Note "git found: $($git.Source)" }
-    else { Write-Bad "git not found — in-app updates will not work without it" }
+    else { Write-Bad "git not found - in-app updates will not work without it" }
     Write-Host ""
     exit 0
 }

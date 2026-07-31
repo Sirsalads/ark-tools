@@ -19,12 +19,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: The script parses
+      # Windows PowerShell 5.1 reads a .ps1 as ANSI unless it carries a UTF-8
+      # BOM, so a single em dash in a comment is a parse error on the shell every
+      # machine actually has — while pwsh 7 reads the same file happily. Keeping
+      # the scripts to plain ASCII removes the whole class, and this is the guard.
+      - name: The scripts are pure ASCII
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($file in @("tools/setup.ps1", "Start.bat", "run.bat")) {
+            $bytes = [System.IO.File]::ReadAllBytes($file)
+            $offset = 0
+            foreach ($byte in $bytes) {
+              if ($byte -gt 127) { $bad += "${file}: byte 0x{0:X2} at offset $offset" -f $byte }
+              $offset++
+            }
+          }
+          if ($bad) {
+            $bad | Select-Object -First 10 | ForEach-Object { Write-Error $_ }
+            Write-Error "non-ASCII bytes break Windows PowerShell 5.1"
+            exit 1
+          }
+          Write-Host "ASCII only"
+
+      - name: The script parses under PowerShell 7
         shell: pwsh
         run: |
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile(
-            "tools/setup.ps1", [ref]$null, [ref]$errors) | Out-Null
+            (Resolve-Path "tools/setup.ps1"), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+
+      # the one that matters: this is the shell Start.bat invokes
+      - name: The script parses under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "tools\setup.ps1"), [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
 
       - name: Report what a fresh machine looks like
