@@ -209,12 +209,21 @@ class AreaPicker(QWidget):
 
     def __init__(self, shot: QPixmap, area: QRect, columns: int, rows: int,
                  origin: tuple[int, int] = (0, 0), label: str = "",
-                 title: str = "", strip: bool = False) -> None:
+                 title: str = "", strip: bool = False,
+                 ratio: float = 1.0) -> None:
         super().__init__(None)
         self._shot = shot
         self._columns = max(int(columns), 1)
         self._rows = max(int(rows), 1)
+        # `origin` is this screen's top-left in Qt's LOGICAL coordinates, and
+        # `ratio` is its device pixel ratio. Both are needed because the two
+        # halves of this widget live in different spaces: mouse events arrive
+        # logical, and everything the macro does later — moving the cursor,
+        # reading pixels — is in PHYSICAL screen pixels. They only look alike
+        # at 100% scaling, which is why mixing them survives a desktop and
+        # falls apart on a laptop.
         self._origin = origin
+        self._ratio = float(ratio) or 1.0
         self._label = label or f"HOLD-TO-DROP AREA · {self._columns} X "\
                                f"{self._rows}"
         self._title = title or "Drag a box over the slots to empty"
@@ -276,15 +285,18 @@ class AreaPicker(QWidget):
         self.cancelled.emit()
 
     # ------------------------------------------------------------- model
+    def _to_physical(self, point: QPoint) -> tuple[int, int]:
+        """Widget point (logical) -> screen pixel (physical)."""
+        return (round((point.x() + self._origin[0]) * self._ratio),
+                round((point.y() + self._origin[1]) * self._ratio))
+
     def _selection(self) -> list[int]:
         """The dragged rectangle, in physical screen pixels."""
         if self._anchor is None:
             return [0, 0, 0, 0]
-        first, second = self._anchor, self._cursor
-        return sweep.normalise(first.x() + self._origin[0],
-                               first.y() + self._origin[1],
-                               second.x() + self._origin[0],
-                               second.y() + self._origin[1])
+        first = self._to_physical(self._anchor)
+        second = self._to_physical(self._cursor)
+        return sweep.normalise(first[0], first[1], second[0], second[1])
 
     def _widget_rect(self) -> QRect:
         if self._anchor is None:

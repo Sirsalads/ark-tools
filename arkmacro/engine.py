@@ -294,7 +294,7 @@ class MacroEngine(QThread):
             return False
         if self._panel_still_up(reference):
             self.log.emit("the inventory is still open — check the two points "
-                          "on the Points tab, and that ARK is in front", "err")
+                          "on the Farm page, and that ARK is in front", "err")
         else:
             self.log.emit(f"inventory closed with {other}", "ok")
         return True
@@ -339,12 +339,12 @@ class MacroEngine(QThread):
         d = self.cfg.drop
         if not any(d.filter_point) or (not d.dry_run and not any(d.dropall_point)):
             self.log.emit("drop pass cancelled: capture the filter and Drop All "
-                          "points on the Points tab first", "err")
+                          "points on the Farm page first", "err")
             return
 
         templates = d.active_templates()
         if not templates:
-            self.log.emit("no template checked on the Templates tab", "warn")
+            self.log.emit("no template checked on the Farm page", "warn")
             return
 
         self.state_changed.emit("dropping")

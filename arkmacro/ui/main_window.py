@@ -131,15 +131,6 @@ def group_label(text: str) -> QLabel:
     return label
 
 
-def chip(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setStyleSheet(
-        f"color:{T.TEXT_DIM}; background:{T.SURFACE_2};"
-        f"border:1px solid {T.BORDER}; border-radius:7px;"
-        "padding:5px 10px; font-size:11px;")
-    return label
-
-
 def step_row(number: str, title: str, detail: str) -> QHBoxLayout:
     row = QHBoxLayout()
     row.setSpacing(13)
@@ -247,10 +238,10 @@ class MainWindow(QWidget):
         self._refresh_points_status()
         self._maybe_rescale_points()
         self._maybe_rescale_area()
-        self._sync_hold_drop()
+        self._sync_key_watch()
         self._refresh_version()
         self.titlebar.update_pill.clicked.connect(self._open_settings)
-        self._log("ready. set the two points on the Points tab before the "
+        self._log("ready. set the two points on the Farm page before the "
                   "first run.", "info")
         self._sync_auto_update()
         if self.cfg.app.check_updates_on_start or self.cfg.app.auto_update:
@@ -384,7 +375,7 @@ class MainWindow(QWidget):
         lay.addWidget(self.mini_log)
 
         lay.addStretch(1)
-        self._refresh_hotkey_chips()
+        self._refresh_key_list()
         return page
 
     def _keys_card(self) -> Card:
@@ -1229,7 +1220,7 @@ class MainWindow(QWidget):
                 "ignores this, so test it: if nothing happens in game, go back "
                 "to foreground.")
 
-    def _refresh_hotkey_chips(self) -> None:
+    def _refresh_key_list(self) -> None:
         """Keep the dashboard key list showing the keys actually bound."""
         keys = self.cfg.hotkeys
         hold, skin = self.cfg.hold_drop, self.cfg.skin_overcap
@@ -1270,7 +1261,7 @@ class MainWindow(QWidget):
         if hasattr(self, "lbl_ready"):
             self.lbl_ready.setText(
                 "Ready to farm." if ready or not drop.enabled
-                else "Set the two points on the Points tab before starting.")
+                else "Set the two points on the Farm page before starting.")
 
     # ---------------------------------------------------------- config i/o
 
@@ -1373,7 +1364,7 @@ class MainWindow(QWidget):
         skin.key = self.cb_skin_key.currentText()
         skin.stops = self.sp_skin_stops.value()
         skin.dwell_ms = self.sp_skin_dwell.value()
-        self._sync_hold_drop()
+        self._sync_key_watch()
 
         feed = self.cfg.auto_feed
         feed.enabled = self.sw_feed.switch.isChecked()
@@ -1397,7 +1388,7 @@ class MainWindow(QWidget):
         self.cfg.app.check_updates_on_start = self.sw_updates.switch.isChecked()
         self.cfg.app.auto_update = self.sw_auto_update.switch.isChecked()
         self._sync_auto_update()
-        self._refresh_hotkey_chips()
+        self._refresh_key_list()
         self._refresh_points_status()
 
     def _save(self) -> None:
@@ -1483,7 +1474,7 @@ class MainWindow(QWidget):
     # ---------------------------------------------------------- hold to drop
 
     # ---------------------------------------------------------- hold to drop
-    def _sync_hold_drop(self) -> None:
+    def _sync_key_watch(self) -> None:
         hold = self.cfg.hold_drop
         skin = self.cfg.skin_overcap
         drop_ready = hold.enabled and sweep.usable(hold.area)
@@ -1568,9 +1559,12 @@ class MainWindow(QWidget):
         if self.engine is not None and self.engine.isRunning():
             if not self._hold_refused:
                 self._hold_refused = True
-                self._log("hold-to-drop ignored while the macro is farming — "
+                self._log("sweep ignored while the farm macro is running — "
                           "stop it first", "warn")
             return False
+        # cleared here rather than on a key release: toggling never sees one, so
+        # a refusal logged once would be the last word for the whole session
+        self._hold_refused = False
         return w.is_foreground(w.find_window(self.cfg.target.window_title))
 
     def _hold_problem(self) -> str:
@@ -1940,7 +1934,7 @@ class MainWindow(QWidget):
         if not inside:
             self._log(f"cannot estimate for a {width}x{height} target — that is "
                       "too narrow for ARK's HUD. Check the window title on the "
-                      "Settings tab, or pick the points on a frozen screen.",
+                      "Settings page, or pick the points on a frozen screen.",
                       "err")
             return
         self.sp_fx.setValue(filter_point[0])
@@ -1982,7 +1976,13 @@ class MainWindow(QWidget):
         Convert the picked areas if the screen changed since they were picked.
 
         These are in screen pixels, not game pixels: they are dragged over a
-        screenshot of the whole desktop, so the screen is what they scale with.
+        capture of the desktop, so the screen is what they scale with.
+
+        Only an area that sat on the primary screen is rescaled. `screen_size`
+        reports that one, so an area dragged on a second monitor has nothing to
+        do with a change reported here — rescaling it by the primary's ratio
+        would move a perfectly good selection off target. Those are left where
+        they are and flagged instead.
         """
         width, height = w.screen_size()
         for target, name in ((self.cfg.hold_drop, "hold-to-drop area"),
@@ -1991,6 +1991,15 @@ class MainWindow(QWidget):
             if not (old and all(old)) or not sweep.usable(target.area):
                 continue
             if [width, height] == list(old):
+                continue
+            x, y, box_w, box_h = target.area
+            on_primary = (0 <= x and 0 <= y
+                          and x + box_w <= old[0] and y + box_h <= old[1])
+            if not on_primary:
+                self._log(f"the primary screen changed from {old[0]}x{old[1]} "
+                          f"to {width}x{height}, but the {name} was picked "
+                          "outside it — left as it was, check it before using "
+                          "it", "warn")
                 continue
             target.area = sweep.rescale(target.area, old, [width, height])
             target.area_resolution = [width, height]
@@ -2042,6 +2051,24 @@ class MainWindow(QWidget):
         QApplication.processEvents()
         QTimer.singleShot(350, self._grab_and_pick_area)
 
+    def _log_screen_geometry(self, geo, ratio: float, shot) -> None:
+        """
+        Say what the picker is working against, every time it opens.
+
+        "It selected the wrong area" is unanswerable without knowing the display
+        scaling, which is exactly the thing that used to break this and is
+        invisible from the outside. One line makes the next report diagnosable.
+        """
+        physical = w.screen_size()
+        self._log(f"picking on a {geo.width()}x{geo.height()} screen at "
+                  f"{ratio:g}x scaling — {shot.width()}x{shot.height()} px "
+                  f"captured, desktop reports {physical[0]}x{physical[1]}",
+                  "info")
+        if abs(round(geo.width() * ratio) - shot.width()) > 2:
+            self._log("the capture does not match the screen it came from — "
+                      "picked areas may land off target. Report this with the "
+                      "line above", "warn")
+
     def _grab_and_pick_area(self) -> None:
         screen = self._pick_target_screen()
         if screen is None:
@@ -2056,15 +2083,21 @@ class MainWindow(QWidget):
         self._shot = shot
         self._shot_origin = (round(geo.x() * ratio), round(geo.y() * ratio))
         self._pick_screen = screen
+        # the picker is handed the LOGICAL origin and the ratio, not the
+        # physical origin: its mouse events arrive logical, and it has to do the
+        # conversion itself or the two get added together
+        logical_origin = (geo.x(), geo.y())
+        self._log_screen_geometry(geo, ratio, shot)
         if self._pick_area_kind == "skin":
             stops = self.sp_skin_stops.value()
-            picker = AreaPicker(shot, geo, stops, 1, self._shot_origin,
+            picker = AreaPicker(shot, geo, stops, 1, logical_origin,
                                 label=f"SKIN OVERCAP STRIP · {stops} STOPS",
                                 title="Drag a box over your hotbar",
-                                strip=True)
+                                strip=True, ratio=ratio)
         else:
             picker = AreaPicker(shot, geo, self.sp_hold_cols.value(),
-                                self.sp_hold_rows.value(), self._shot_origin)
+                                self.sp_hold_rows.value(), logical_origin,
+                                ratio=ratio)
         picker.picked.connect(self._on_area_picked)
         picker.cancelled.connect(self._cancel_pick)
         self._drop_picker()
@@ -2113,6 +2146,7 @@ class MainWindow(QWidget):
         self._shot = shot
         self._shot_origin = (round(geo.x() * ratio), round(geo.y() * ratio))
         self._pick_screen = screen
+        self._log_screen_geometry(geo, ratio, shot)
         self._pick_step(0)
 
     def _pick_step(self, index: int) -> None:

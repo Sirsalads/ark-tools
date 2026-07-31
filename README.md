@@ -112,6 +112,29 @@ keyword that gets typed into the filter:
 - **Presets…** opens a library of ARK resources grouped by what you are
   farming.
 
+## Display scaling
+
+Every coordinate the app stores — the two farm points, both picked areas — is a
+**physical screen pixel**, and so is every cursor move and pixel read it makes.
+Windows reports those directly only to a **DPI-aware** process, so the app claims
+per-monitor awareness on startup rather than inheriting it from the toolkit.
+
+This matters because **laptops are almost never at 100%**. Windows recommends
+125% or 150% for a high-resolution laptop panel, and at that setting the window
+toolkit's coordinates and the screen's real pixels are different numbers for the
+same place. Mixing them is invisible on a desktop at 100% and puts a picked area
+a third off on a laptop.
+
+Every time a picker opens, the log records what it is working against:
+
+```
+21:04:12 picking on a 1280x720 screen at 1.5x scaling — 1920x1080 px captured, desktop reports 1920x1080
+```
+
+If a selection ever lands somewhere you did not drag, that line is the first
+thing to read, and the app calls it out itself when the capture and the screen
+disagree.
+
 ## How ARK's filter works — read this before arming
 
 The inventory search is a case-insensitive **"contains" match on the item's

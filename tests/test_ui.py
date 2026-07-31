@@ -81,7 +81,7 @@ win.stack.setCurrentIndex(PAGE_DASHBOARD)
 win.cfg.hold_drop.mode = "toggle"
 win.cfg.hold_drop.activate_key = "f3"
 win.cfg.skin_overcap.activate_key = "f4"
-win._refresh_hotkey_chips()
+win._refresh_key_list()
 caps = {name: row.cap.text() for name, row in win.key_rows.items()}
 assert caps == {"toggle": "F6", "drop_now": "F7", "panic": "F8",
                 "pick_points": "F9", "hold": "F3", "skin": "F4"}, caps
@@ -90,10 +90,10 @@ assert caps == {"toggle": "F6", "drop_now": "F7", "panic": "F8",
 # key the dashboard has to show
 win.cfg.hold_drop.mode = "manual"
 win.cfg.hold_drop.key = "o"
-win._refresh_hotkey_chips()
+win._refresh_key_list()
 assert win.key_rows["hold"].cap.text() == "O", win.key_rows["hold"].cap.text()
 win.cfg.hold_drop.mode = "toggle"
-win._refresh_hotkey_chips()
+win._refresh_key_list()
 print("OK  the dashboard names every key, including the two macro ones")
 
 # ------------------------------------------------- 2) template editor
@@ -892,6 +892,70 @@ assert area_picker._selection() == [2020, 200, 240, 200], area_picker._selection
 assert area_picker._widget_rect() == QRect(100, 200, 240, 200)
 area_picker.deleteLater()
 print("OK  the area picker normalises the drag and offsets to the real screen")
+
+# ------------------------- 24b) a scaled display, which is every laptop
+# Mouse events arrive in Qt's LOGICAL pixels; everything the macro does later —
+# moving the cursor, reading the screen — is in PHYSICAL ones. At 100% the two
+# are identical and mixing them survives; at 150% the area comes out a third too
+# small and in the wrong place. That is the bug this pins down.
+scaled = AreaPicker(shot, QRect(0, 0, 1280, 720), 4, 4, (0, 0), ratio=1.5)
+scaled._anchor = QPoint(200, 100)
+scaled._cursor = QPoint(400, 300)
+assert scaled._selection() == [300, 150, 300, 300], scaled._selection()
+# the drawn box stays in widget space — that is what the eye checks against
+assert scaled._widget_rect() == QRect(200, 100, 200, 200)
+
+# a scaled second monitor: the logical origin scales with everything else
+offset = AreaPicker(shot, QRect(1280, 0, 1280, 720), 4, 4, (1280, 0), ratio=1.5)
+offset._anchor = QPoint(0, 0)
+offset._cursor = QPoint(200, 200)
+assert offset._selection() == [1920, 0, 300, 300], offset._selection()
+scaled.deleteLater()
+offset.deleteLater()
+print("OK  the area picker converts logical pixels to physical ones")
+
+# ------------------------- 24c) what the picker hands back is what gets stored
+win._pick_area_kind = "drop"
+win._on_area_picked(300, 150, 300, 300)
+assert win.cfg.hold_drop.area == [300, 150, 300, 300], win.cfg.hold_drop.area
+assert win.cfg.hold_drop.area_resolution == list(w_module.screen_size())
+win._pick_area_kind = "skin"
+win._on_area_picked(100, 900, 600, 80)
+assert win.cfg.skin_overcap.area == [100, 900, 600, 80]
+assert win.cfg.hold_drop.area == [300, 150, 300, 300], "the two areas collided"
+win._pick_area_kind = "drop"
+
+# the geometry line is logged every pick, and a capture that does not match the
+# screen it came from is called out — that is the shape of the bug this had
+lines: list[str] = []
+original_log = win._log
+win._log = lambda message, level="info": lines.append(f"{level}:{message}")
+win._log_screen_geometry(QRect(0, 0, 1280, 720), 1.5, QPixmap(1920, 1080))
+assert any("1.5x scaling" in ln for ln in lines), lines
+assert not any(ln.startswith("warn:") for ln in lines), lines
+lines.clear()
+win._log_screen_geometry(QRect(0, 0, 1280, 720), 1.5, QPixmap(1280, 720))
+assert any("does not match the screen" in ln for ln in lines), lines
+win._log = original_log
+print("OK  a picked area reaches the right macro, and the scaling is logged")
+
+# ------------------------- 24d) rescaling only touches the primary screen
+# An area dragged on a second monitor has nothing to do with the primary
+# changing resolution; scaling it by the primary's ratio would walk a good
+# selection off target.
+win.cfg.hold_drop.area = [100, 100, 400, 300]        # inside 1920x1080
+win.cfg.hold_drop.area_resolution = [1920, 1080]
+win.cfg.skin_overcap.area = [2100, 900, 600, 80]     # on a second monitor
+win.cfg.skin_overcap.area_resolution = [1920, 1080]
+w_module.screen_size = lambda: (2560, 1440)
+win._maybe_rescale_area()
+assert win.cfg.hold_drop.area_resolution == [2560, 1440], "the primary one "\
+    "was not rescaled"
+assert win.cfg.hold_drop.area != [100, 100, 400, 300], "it did not move"
+assert win.cfg.skin_overcap.area == [2100, 900, 600, 80], \
+    "an off-primary selection was rescaled anyway"
+w_module.screen_size = lambda: (1920, 1080)
+print("OK  only areas that sat on the primary screen get rescaled")
 
 win.hotkeys.stop()
 win.close()
