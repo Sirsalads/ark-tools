@@ -3,9 +3,11 @@ config.json
 state/
 captures/
 
-# python
+# python — .python is the private interpreter the bootstrap installs when the
+# machine has none, .venv is where it puts the packages
 __pycache__/
 *.py[cod]
+.python/
 .venv/
 venv/
 *.egg-info/

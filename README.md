@@ -14,19 +14,44 @@ Swap the backdrop by dropping your own `brand.png` (or `.gif`, `.jpg`) into
 
 ## Install
 
+**Double-click `Start.bat`.** That is the whole install.
+
+Nothing has to be on the machine first — no Python, no terminal, no
+administrator rights. The first run finds a Python if there is one, and installs
+a private copy into the app folder if there is not, puts the packages next to it
+in `.venv`, and opens the app. Later runs skip all of that and just start.
+
+Everything it downloads lives **inside the app folder**. Nothing is added to
+`PATH`, nothing is installed for all users, and deleting the folder removes every
+trace of it.
+
+<details>
+<summary>What if it does not work</summary>
+
+Run this in the app folder and read what it says — it changes nothing:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\setup.ps1 -CheckOnly
+```
+
+It reports the Python it found, whether the packages are installed, and whether
+`git` is present. The last one matters: **in-app updates need `git`**, and a copy
+downloaded as a ZIP instead of cloned has no repository to pull into. The Updates
+card says so when that is the case.
+
+</details>
+
+<details>
+<summary>Running it from a terminal instead</summary>
+
 Windows, Python 3.10+.
 
 ```bash
 pip install -r requirements.txt
-```
-
-Run it:
-
-```bash
 python main.py
 ```
 
-Or double-click `run.bat`.
+</details>
 
 ## Setting the two points
 
@@ -67,7 +92,10 @@ whatever we push here lands on your machine with one click.
   touches your settings, captured points or dry-run screenshots.
 - It refuses to pull over uncommitted changes instead of stashing them. Commit
   or discard first.
-- If `requirements.txt` changed, the card says so — run the pip install again.
+- If `requirements.txt` changed, the card says so, and the restart goes through
+  `Start.bat` — which installs the new packages before the app comes back. It is
+  still not pulled unattended: a failed install should not be discovered by the
+  app never reappearing.
 - It checks once on startup (toggle in the same card). When something is
   waiting, an *update available* pill appears in the title bar.
 - Rolling back is plain git: `git reset --hard <sha>`, or `git reflog` to find

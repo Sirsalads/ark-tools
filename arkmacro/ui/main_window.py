@@ -124,6 +124,22 @@ def heading(title: str, subtitle: str, kicker: str = "") -> QVBoxLayout:
     return box
 
 
+def round_trip(point: tuple[int, int], origin: tuple[int, int],
+               ratio: float) -> tuple[tuple[int, int], int]:
+    """
+    Physical point -> logical -> physical again, and how far off it came back.
+
+    This is the conversion the area picker depends on, kept as a plain function
+    so it can be checked against the awkward cases directly: a monitor sitting
+    at a negative offset, and any scaling other than 100%.
+    """
+    ratio = float(ratio) or 1.0
+    logical = (point[0] / ratio - origin[0], point[1] / ratio - origin[1])
+    back = (round((logical[0] + origin[0]) * ratio),
+            round((logical[1] + origin[1]) * ratio))
+    return back, max(abs(back[0] - point[0]), abs(back[1] - point[1]))
+
+
 def group_label(text: str) -> QLabel:
     """Small caps rule inside a card, for grouping rows that belong together."""
     label = QLabel(text)
@@ -2109,26 +2125,25 @@ class MainWindow(QWidget):
         that put picked areas a third off on a scaled laptop.
         """
         point = w.get_cursor_pos()
-        screen = QApplication.screenAt(QPoint(*point))
-        if screen is None:
-            # screenAt takes logical coordinates, so on a scaled display the
-            # physical point can miss every screen; scale it and try again
-            for candidate in QApplication.screens():
-                ratio = candidate.devicePixelRatio() or 1.0
-                if candidate.geometry().contains(
-                        QPoint(round(point[0] / ratio), round(point[1] / ratio))):
-                    screen = candidate
-                    break
+        # QApplication.screenAt takes LOGICAL coordinates and this point is
+        # physical. Handing it over directly happens to work at 100% and quietly
+        # misses every screen above it — the same class of mistake this check
+        # exists to catch, so the lookup scales first rather than relying on the
+        # two being equal.
+        screen = None
+        for candidate in QApplication.screens():
+            ratio = candidate.devicePixelRatio() or 1.0
+            if candidate.geometry().contains(
+                    QPoint(round(point[0] / ratio), round(point[1] / ratio))):
+                screen = candidate
+                break
         if screen is None:
             return False, (f"the cursor at {point} is not on any screen this "
                            "app can see — report this line")
 
         geo = screen.geometry()
         ratio = screen.devicePixelRatio() or 1.0
-        logical = (point[0] / ratio - geo.x(), point[1] / ratio - geo.y())
-        back = (round((logical[0] + geo.x()) * ratio),
-                round((logical[1] + geo.y()) * ratio))
-        drift = max(abs(back[0] - point[0]), abs(back[1] - point[1]))
+        back, drift = round_trip(point, (geo.x(), geo.y()), ratio)
         if drift <= 1:
             return True, (f"cursor at {point} round-trips through {ratio:g}x "
                           f"scaling to {back} — picked areas will land where "
@@ -2497,9 +2512,26 @@ class MainWindow(QWidget):
         QTimer.singleShot(700, self._restart)
 
     def _restart(self) -> None:
-        """Relaunch from the freshly pulled source and quit this instance."""
-        script = ROOT / "main.py"
-        started = QProcess.startDetached(sys.executable, [str(script)],
+        """
+        Relaunch from the freshly pulled source and quit this instance.
+
+        Through the bootstrap when there is one, because an update that changed
+        requirements.txt needs the new packages installed before the app comes
+        back, and only the bootstrap does that. Relaunching the interpreter
+        directly would return to a working app that is missing what the new
+        commit expects.
+        """
+        launcher = ROOT / "Start.bat"
+        if launcher.exists():
+            started = QProcess.startDetached(
+                "cmd.exe", ["/c", "start", "", str(launcher)], str(ROOT))
+            if started:
+                self.close()
+                return
+            self._log("could not run Start.bat — falling back to relaunching "
+                      "the interpreter, which will not pick up new packages",
+                      "warn")
+        started = QProcess.startDetached(sys.executable, [str(ROOT / "main.py")],
                                          str(ROOT))
         if not started:
             self._log("could not relaunch — start the app again manually",

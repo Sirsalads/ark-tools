@@ -27,7 +27,7 @@ from arkmacro.ui.backdrop import Backdrop, load_brand  # noqa: E402
 from arkmacro.ui.main_window import (APP_NAME, NAV, PAGE_DASHBOARD,  # noqa: E402
                                      PAGE_DROP, PAGE_FARM, PAGE_LOG,
                                      PAGE_OVERCAP, PAGE_SETTINGS,
-                                     MainWindow)
+                                     MainWindow, round_trip)
 from arkmacro.ui.picker import ScreenPicker  # noqa: E402
 from arkmacro.ui.theme import QSS  # noqa: E402
 from arkmacro.ui.widgets import FormGrid, PresetDialog, TemplateEditor  # noqa: E402
@@ -979,6 +979,17 @@ w_module.get_cursor_pos = lambda: (100, 100)
 ok, detail = win._round_trip_cursor()
 assert ok, detail
 win._log = original_log
+
+# the awkward geometries, checked directly: a second monitor to the LEFT of the
+# primary sits at a negative offset, which is a real reported setup, and any
+# scaling other than 100% is the case that broke the picker
+for point, origin, ratio in (((1231, 621), (0, 0), 1.0),
+                             ((-900, 400), (-1920, 0), 1.0),
+                             ((742, 511), (0, 0), 1.5),
+                             ((-2400, 300), (-1920, 0), 1.5),
+                             ((3000, 700), (1920, 0), 1.25)):
+    back, drift = round_trip(point, origin, ratio)
+    assert drift <= 1, f"{point} at {ratio}x from {origin} came back {back}"
 print("OK  the display check measures the machine, and can say no")
 
 win.hotkeys.stop()

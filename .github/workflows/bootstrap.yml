@@ -1,0 +1,82 @@
+name: bootstrap
+
+# The bootstrap is Windows-only PowerShell, so it cannot be checked anywhere it
+# is written. This runs it on a real Windows machine that has nothing set up,
+# which is exactly the case it exists for.
+on:
+  push:
+    paths:
+      - "tools/setup.ps1"
+      - "Start.bat"
+      - "requirements.txt"
+      - ".github/workflows/bootstrap.yml"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The script parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "tools/setup.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+
+      - name: Report what a fresh machine looks like
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/setup.ps1 -CheckOnly
+
+      - name: Set up, without launching
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/setup.ps1
+
+      - name: The app's dependencies really are installed
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -c "import PySide6; print('PySide6', PySide6.__version__)"
+
+      - name: The window builds under the interpreter the bootstrap chose
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .\.venv\Scripts\python.exe -c @"
+          from PySide6.QtWidgets import QApplication
+          from arkmacro.ui.main_window import MainWindow, NAV
+          from arkmacro.ui.theme import QSS
+          app = QApplication([])
+          app.setStyleSheet(QSS)
+          window = MainWindow()
+          assert window.stack.count() == len(NAV)
+          window.hotkeys.stop()
+          window.close()
+          print('the app starts on a machine set up from nothing')
+          "@
+
+      - name: A second run reuses what the first one built
+        shell: pwsh
+        run: |
+          $before = (Get-Item .venv\.requirements-hash).LastWriteTimeUtc
+          powershell -ExecutionPolicy Bypass -File tools/setup.ps1
+          $after = (Get-Item .venv\.requirements-hash).LastWriteTimeUtc
+          if ($before -ne $after) {
+            Write-Error "the second run reinstalled dependencies it already had"
+            exit 1
+          }
+          Write-Host "second run was a no-op, as it should be"
+
+      - name: The test suite passes on Windows
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          foreach ($suite in @("test_engine", "test_ui", "test_updater", "test_winapi")) {
+            Write-Host "--- $suite"
+            .\.venv\Scripts\python.exe "tests/$suite.py"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
