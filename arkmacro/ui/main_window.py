@@ -6,7 +6,7 @@ import sys
 import time
 from html import escape
 
-from PySide6.QtCore import QProcess, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDoubleSpinBox, QFrame, QGraphicsDropShadowEffect,
@@ -1001,10 +1001,27 @@ class MainWindow(QWidget):
         target.add(hint_label("Only enable this if the in-game search field "
                               "ignores the letters the macro types."))
 
-        detect = QPushButton("Find the ARK window")
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+        detect = QPushButton("  Find the ARK window")
         detect.setCursor(Qt.PointingHandCursor)
+        detect.setIcon(icons.icon("search", T.TEXT_DIM, 15))
+        detect.setIconSize(QSize(15, 15))
         detect.clicked.connect(self._detect_window)
-        target.add(detect)
+        check = QPushButton("  Check this display")
+        check.setCursor(Qt.PointingHandCursor)
+        check.setIcon(icons.icon("shield", T.TEXT_DIM, 15))
+        check.setIconSize(QSize(15, 15))
+        check.setToolTip("Measures your screens and proves the app and Windows "
+                         "agree on where things are")
+        check.clicked.connect(self._check_display)
+        buttons.addWidget(detect, 1)
+        buttons.addWidget(check, 1)
+        target.add(buttons)
+        target.add(hint_label(
+            "Run the display check once on a new machine. It writes what it "
+            "found to the Log — screens, scaling, and whether a real coordinate "
+            "survives the round trip the pickers depend on."))
         lay.addWidget(target)
 
 
@@ -2050,6 +2067,75 @@ class MainWindow(QWidget):
         self.hide()
         QApplication.processEvents()
         QTimer.singleShot(350, self._grab_and_pick_area)
+
+    # -------------------------------------------------------- display check
+    def _check_display(self) -> None:
+        """
+        Prove the coordinate pipeline on the machine it is actually running on.
+
+        The picked-area bug could not be reproduced anywhere but on a scaled
+        display, and scaling is invisible from the outside. So rather than ask
+        someone to describe their setup, the app measures it: it takes a real
+        physical coordinate from Windows, pushes it through the exact conversion
+        the area picker uses, and checks it comes back unchanged.
+        """
+        self._log("--- display check ---", "warn")
+        self._log(f"DPI awareness: {w.dpi_awareness()}", "info")
+        physical = w.screen_size()
+        self._log(f"primary screen reports {physical[0]}x{physical[1]} px",
+                  "info")
+
+        screens = QApplication.screens()
+        for index, screen in enumerate(screens, 1):
+            geo = screen.geometry()
+            ratio = screen.devicePixelRatio()
+            tag = " (primary)" if screen is QApplication.primaryScreen() else ""
+            self._log(
+                f"screen {index}{tag}: {geo.width()}x{geo.height()} logical at "
+                f"({geo.x()}, {geo.y()}), {ratio:g}x scaling → "
+                f"{round(geo.width() * ratio)}x{round(geo.height() * ratio)} "
+                "physical", "info")
+
+        ok, detail = self._round_trip_cursor()
+        self._log(detail, "ok" if ok else "err")
+        self._log("--- display check done ---", "ok" if ok else "err")
+
+    def _round_trip_cursor(self) -> tuple[bool, str]:
+        """
+        Physical cursor -> logical -> physical again, through the picker's maths.
+
+        Windows gives the starting point, so a mismatch means the app and the
+        desktop disagree about where things are — which is exactly the failure
+        that put picked areas a third off on a scaled laptop.
+        """
+        point = w.get_cursor_pos()
+        screen = QApplication.screenAt(QPoint(*point))
+        if screen is None:
+            # screenAt takes logical coordinates, so on a scaled display the
+            # physical point can miss every screen; scale it and try again
+            for candidate in QApplication.screens():
+                ratio = candidate.devicePixelRatio() or 1.0
+                if candidate.geometry().contains(
+                        QPoint(round(point[0] / ratio), round(point[1] / ratio))):
+                    screen = candidate
+                    break
+        if screen is None:
+            return False, (f"the cursor at {point} is not on any screen this "
+                           "app can see — report this line")
+
+        geo = screen.geometry()
+        ratio = screen.devicePixelRatio() or 1.0
+        logical = (point[0] / ratio - geo.x(), point[1] / ratio - geo.y())
+        back = (round((logical[0] + geo.x()) * ratio),
+                round((logical[1] + geo.y()) * ratio))
+        drift = max(abs(back[0] - point[0]), abs(back[1] - point[1]))
+        if drift <= 1:
+            return True, (f"cursor at {point} round-trips through {ratio:g}x "
+                          f"scaling to {back} — picked areas will land where "
+                          "you drag them")
+        return False, (f"cursor at {point} came back as {back}, {drift}px off "
+                       f"at {ratio:g}x scaling — picked areas will NOT land "
+                       "where you drag them. Report this line")
 
     def _log_screen_geometry(self, geo, ratio: float, shot) -> None:
         """

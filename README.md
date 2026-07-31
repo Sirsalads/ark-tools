@@ -125,7 +125,24 @@ toolkit's coordinates and the screen's real pixels are different numbers for the
 same place. Mixing them is invisible on a desktop at 100% and puts a picked area
 a third off on a laptop.
 
-Every time a picker opens, the log records what it is working against:
+**Settings → Check this display** measures your machine and writes the answer
+to the Log. Run it once on a new PC:
+
+```
+--- display check ---
+DPI awareness: per-monitor v2
+primary screen reports 1920x1080 px
+screen 1 (primary): 1280x720 logical at (0, 0), 1.5x scaling → 1920x1080 physical
+cursor at (742, 511) round-trips through 1.5x scaling to (742, 511) — picked areas will land where you drag them
+--- display check done ---
+```
+
+It takes a real coordinate from Windows, pushes it through the exact conversion
+the area picker uses, and checks it comes back unchanged. If it does not, it says
+so in red rather than passing quietly — a check that always passes would be worse
+than none.
+
+Every time a picker opens, the log also records what it is working against:
 
 ```
 21:04:12 picking on a 1280x720 screen at 1.5x scaling — 1920x1080 px captured, desktop reports 1920x1080

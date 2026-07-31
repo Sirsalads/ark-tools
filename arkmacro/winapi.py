@@ -95,6 +95,13 @@ user32.VkKeyScanW.argtypes = (ctypes.c_wchar,)
 user32.VkKeyScanW.restype = ctypes.c_short
 user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
 user32.GetAsyncKeyState.restype = ctypes.c_short
+# present from Windows 10 1607; absent on anything older, which dpi_awareness
+# reports rather than crashing on
+if hasattr(user32, "GetThreadDpiAwarenessContext"):
+    user32.GetThreadDpiAwarenessContext.argtypes = ()
+    user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user32.GetAwarenessFromDpiAwarenessContext.argtypes = (ctypes.c_void_p,)
+    user32.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
 
 
 def _send(*inputs: INPUT) -> None:
@@ -381,6 +388,26 @@ def is_window(hwnd: int) -> bool:
 
 def is_foreground(hwnd: int) -> bool:
     return bool(hwnd) and user32.GetForegroundWindow() == hwnd
+
+
+def dpi_awareness() -> str:
+    """
+    How Windows is reporting coordinates to this process, in plain words.
+
+    Everything the app stores is a physical screen pixel, and Windows only hands
+    those to an aware process. On anything but "per-monitor" a scaled display
+    silently reports something else, so this is worth being able to read out
+    rather than assume.
+    """
+    try:
+        context = user32.GetThreadDpiAwarenessContext()
+        awareness = user32.GetAwarenessFromDpiAwarenessContext(context)
+    except (AttributeError, OSError):
+        return "unknown (Windows older than 10 1607)"
+    return {0: "unaware — coordinates will be virtualised",
+            1: "system",
+            2: "per-monitor",
+            3: "per-monitor v2"}.get(awareness, f"unrecognised ({awareness})")
 
 
 def screen_size() -> tuple[int, int]:

@@ -957,6 +957,30 @@ assert win.cfg.skin_overcap.area == [2100, 900, 600, 80], \
 w_module.screen_size = lambda: (1920, 1080)
 print("OK  only areas that sat on the primary screen get rescaled")
 
+# ------------------------- 24e) the display check has to be able to fail
+# It exists because the picked-area bug could not be reproduced anywhere but on
+# a scaled display. A check that always passes would be worse than none.
+lines.clear()
+win._log = lambda message, level="info": lines.append(f"{level}:{message}")
+w_module.dpi_awareness = lambda: "per-monitor v2"
+win._check_display()
+assert any("DPI awareness" in ln for ln in lines), lines
+assert any(ln.startswith("ok:") and "round-trips" in ln for ln in lines), lines
+assert not any(ln.startswith("err:") for ln in lines), lines
+
+# a cursor Windows reports somewhere the app cannot place is a real failure,
+# and has to read as one
+w_module.get_cursor_pos = lambda: (999999, 999999)
+ok, detail = win._round_trip_cursor()
+assert not ok and "not on any screen" in detail, detail
+
+# and so is a coordinate that does not survive the trip
+w_module.get_cursor_pos = lambda: (100, 100)
+ok, detail = win._round_trip_cursor()
+assert ok, detail
+win._log = original_log
+print("OK  the display check measures the machine, and can say no")
+
 win.hotkeys.stop()
 win.close()
 print("\nALL UI TESTS PASSED")
