@@ -12,6 +12,10 @@ glows, glass cards, and the tribe brand melting out of the backdrop.
 Swap the backdrop by dropping your own `brand.png` (or `.gif`, `.jpg`) into
 `assets/`. No file, no problem — the gradient stands on its own.
 
+> **New here?** [**GUIDE.md**](GUIDE.md) walks the whole thing from the first
+> click to a farming session. This file is the reference behind it: what each
+> piece does and why it works that way.
+
 ## Install
 
 **Double-click `Start.bat`.** That is the whole install.
