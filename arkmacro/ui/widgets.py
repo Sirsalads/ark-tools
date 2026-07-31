@@ -614,6 +614,14 @@ class TemplateEditor(QWidget):
         if not item or not keyword:
             return
         row = self.list.row(item)
+        # Add refuses a keyword the list already has; Save has to as well, or the
+        # same filter ends up in the cycle twice and the second pass types it
+        # into an inventory the first one already emptied
+        clashes = {t["keyword"].lower()
+                   for index, t in enumerate(self.templates())
+                   if index != row and t["keyword"]}
+        if keyword.lower() in clashes:
+            return
         enabled = item.checkState() == Qt.Checked
         name = self.name_edit.text().strip() or keyword.capitalize()
         self._loading = True

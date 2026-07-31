@@ -112,6 +112,21 @@ editor.keyword_edit.setText("OBSIDIAN")
 editor._add()
 assert len(editor.templates()) == before + 1, "duplicate keyword got in"
 
+# and Save cannot sneak one past either: the same filter twice in the cycle
+# means a second pass typing into an inventory the first one already emptied
+editor.list.setCurrentRow(0)
+was = editor.templates()[0]["keyword"]
+editor.name_edit.setText("Sneaky")
+editor.keyword_edit.setText("obsidian")
+editor._update()
+assert editor.templates()[0]["keyword"] == was, "Save created a duplicate"
+assert len({t["keyword"] for t in editor.templates()}) == len(editor.templates())
+# renaming a row to the keyword it already has is not a clash with itself
+editor.keyword_edit.setText(was)
+editor.name_edit.setText("Renamed in place")
+editor._update()
+assert editor.templates()[0]["name"] == "Renamed in place", "a row blocked itself"
+
 # rename the selected row, keeping its checked state
 win.stack.setCurrentIndex(PAGE_FARM)
 editor.list.setCurrentRow(0)
