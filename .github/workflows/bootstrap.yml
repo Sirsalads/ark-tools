@@ -3,9 +3,14 @@ name: bootstrap
 # The bootstrap is Windows-only PowerShell, so it cannot be checked anywhere it
 # is written. This runs it on a real Windows machine that has nothing set up,
 # which is exactly the case it exists for.
+# It also runs the four suites, and those cover code that cannot even be
+# imported on Linux (ctypes.WinDLL), so any Python change has to come through
+# here too — otherwise the engine and the UI ship unverified on the one
+# platform they run on.
 on:
   push:
     paths:
+      - "**/*.py"
       - "tools/setup.ps1"
       - "Start.bat"
       - "requirements.txt"
