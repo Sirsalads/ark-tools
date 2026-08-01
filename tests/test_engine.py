@@ -345,47 +345,49 @@ assert sum(1 for c in calls if c == ("click_at", 1400, 900)) == 2
 cfg.drop.verify_filter = True
 print("OK  a screen that cannot be read holds Drop All back, unless told not to")
 
-# ------------------- 1f) a keyword too short to be a filter is refused
-# Also from that session: a template named "Stone" whose keyword was the single
-# letter "o". ARK matches any part of a name, so "o" lists Stone, Wood, Cooked
-# Meat, Hide Boots and most of a bag — the filter worked, and it emptied the
-# inventory. No delay tuning fixes that; the app should never have accepted it.
-assert presets.too_short("o") and presets.too_short("st")
-assert not presets.too_short("sap") and not presets.too_short("thatch")
-assert not presets.too_short(""), "empty is the caller's business, not too short"
+# ------------------- 1f) a one-letter keyword is flagged, never refused
+# A template named "Stone" whose keyword is the single letter "o" looks like a
+# typo and is not one. ARK matches any part of a name, so "o" lists Stone, Wood,
+# Cooked Meat, Hide Boots and most of a bag — and drops all of it, keeping Metal
+# and Element Shard, which have no "o" in them. That is an inverse filter, and
+# whose keyword it is is not the app's call: the UI marks it, the engine runs it.
+assert presets.is_broad("o") and presets.is_broad("st")
+assert not presets.is_broad("sap") and not presets.is_broad("thatch")
+assert not presets.is_broad(""), "empty is the caller's business, not broad"
 
 calls.clear()
 levels.clear()
 cfg.drop.verify_filter = False
 cfg.drop.templates = [
-    {"name": "Stone", "keyword": "o", "enabled": True},
+    {"name": "Not metal", "keyword": "o", "enabled": True},
     {"name": "Thatch", "keyword": "thatch", "enabled": True},
 ]
 mixed = eng.MacroEngine(cfg)
 mixed.log.connect(lambda _m, level: levels.append(level))
 mixed._running = True
 mixed._run_drop()
-assert not any(c == ("type", "o") for c in calls), '"o" was typed into the filter'
-assert ("type", "thatch") in calls, "the usable template was dropped too"
-assert "err" in levels, "the refusal was silent"
+assert ("type", "o") in calls, '"o" never reached the filter'
+assert ("type", "thatch") in calls, "the second template did not run"
+assert sum(1 for c in calls if c == ("click_at", 1400, 900)) == 2, \
+    "both templates should have clicked Drop All"
+assert mixed.drops == 1, "a pass carrying a broad keyword did not count"
 
-# and one that is nothing but short keywords does not open the inventory at all
+# and a pass made of nothing else still opens the inventory and runs
 calls.clear()
-cfg.drop.templates = [{"name": "Stone", "keyword": "o", "enabled": True}]
-only_short = eng.MacroEngine(cfg)
-only_short.log.connect(lambda _m, _l: None)
-only_short._running = True
-only_short._run_drop()
-assert not any(c == ("click_at", 1400, 900) for c in calls)
-assert not any(c == ("key", hex(0x49)) for c in calls), \
-    "it opened the inventory for a pass that could not run"
+cfg.drop.templates = [{"name": "Not metal", "keyword": "o", "enabled": True}]
+only_broad = eng.MacroEngine(cfg)
+only_broad.log.connect(lambda _m, _l: None)
+only_broad._running = True
+only_broad._run_drop()
+assert any(c == ("key", hex(0x49)) for c in calls), "the inventory never opened"
+assert sum(1 for c in calls if c == ("click_at", 1400, 900)) == 1
 
 cfg.drop.templates = [
     {"name": "Thatch", "keyword": "thatch", "enabled": True},
     {"name": "Disabled", "keyword": "wood", "enabled": False},
     {"name": "Stone", "keyword": "stone", "enabled": True},
 ]
-print("OK  a keyword too short to be a filter never reaches the game")
+print("OK  a one-letter keyword runs as an inverse filter, flagged not blocked")
 
 # ------------------------------------------------- 2) dry run never drops
 calls.clear()

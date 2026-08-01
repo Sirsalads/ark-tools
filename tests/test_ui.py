@@ -127,21 +127,40 @@ editor.name_edit.setText("Renamed in place")
 editor._update()
 assert editor.templates()[0]["name"] == "Renamed in place", "a row blocked itself"
 
-# a keyword too short to be a filter is refused, with a reason for the log
+# a refused edit is silent in the list, so it has to reach the log
 refusals: list[str] = []
 editor.rejected.connect(refusals.append)
+editor.keyword_edit.setText("OBSIDIAN")
+editor._add()
+assert refusals and "already a template" in refusals[-1], refusals
+
+# a one-letter keyword goes in. It matches most of a bag, which is either a typo
+# or an inverse filter — "o" drops everything except Metal and Element Shard —
+# and that call belongs to whoever typed it. So: accepted, and said out loud.
+warnings: list[str] = []
+editor.warned.connect(warnings.append)
 count = len(editor.templates())
-editor.name_edit.setText("Stone")
+editor.name_edit.setText("Not metal")
 editor.keyword_edit.setText("o")
 editor._add()
-assert len(editor.templates()) == count, '"o" was added as a keyword'
-assert refusals and "too short" in refusals[-1], refusals
-# and Save cannot sneak one in either
+assert len(editor.templates()) == count + 1, '"o" was refused as a keyword'
+assert editor.templates()[-1]["keyword"] == "o"
+assert warnings and "most of the bag" in warnings[-1], warnings
+# the row wears the warning too, so it is not a surprise later
+broad_row = editor.list.item(editor.list.count() - 1)
+assert "matches most of a bag" in broad_row.text(), broad_row.text()
+assert not broad_row.toolTip().startswith("types "), "no explanation on the row"
+# Save accepts one as well
 editor.list.setCurrentRow(0)
-keep = editor.templates()[0]["keyword"]
+editor.name_edit.setText("Two letters")
 editor.keyword_edit.setText("st")
 editor._update()
-assert editor.templates()[0]["keyword"] == keep, "Save let a short keyword in"
+assert editor.templates()[0]["keyword"] == "st", "Save refused a short keyword"
+editor.name_edit.setText("Thatch")
+editor.keyword_edit.setText("thatch")
+editor._update()
+editor.list.setCurrentRow(editor.list.count() - 1)
+editor._remove()
 
 # rename the selected row, keeping its checked state
 win.stack.setCurrentIndex(PAGE_FARM)

@@ -170,9 +170,12 @@ returns no pixels, the check cannot run, and rather than drop unverified the
 macro **holds the drop back and says so in red**. If every pass is refusing,
 that is what happened: switch ARK to borderless.
 
-**Keywords must be at least 3 letters.** `o` is not a filter — it lists Stone,
-Wood, Cooked Meat, Hide Boots and most of your bag, and Drop All takes all of
-it. The app refuses anything shorter and marks saved ones in red.
+**A one- or two-letter keyword is flagged, not blocked.** `o` lists Stone, Wood,
+Cooked Meat, Hide Boots and most of your bag, and Drop All takes all of it. That
+is a typo about as often as it is the whole point: `o` while farming metal drops
+everything and keeps **Metal** and **Element Shard**, which have no `o` in them,
+and your metal tools survive for the same reason. So the app marks the row amber
+and runs it. Dry-run a new one once and you will see exactly which side it is.
 
 ### 3.5 — Dry run
 

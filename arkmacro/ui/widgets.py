@@ -481,6 +481,7 @@ class TemplateEditor(QWidget):
 
     changed = Signal()
     rejected = Signal(str)   # why an edit was refused, for the log
+    warned = Signal(str)     # accepted, but worth saying out loud
 
     def __init__(self, templates: list[dict],
                  parent: QWidget | None = None) -> None:
@@ -557,16 +558,19 @@ class TemplateEditor(QWidget):
         item.setCheckState(Qt.Checked if template.get("enabled") else Qt.Unchecked)
         item.setData(Qt.UserRole, {"name": name, "keyword": keyword})
         item.setText(f'{name}   ·   "{keyword}"')
-        # a keyword already saved below the floor gets the loudest treatment the
-        # list has: the engine will refuse it, and until then it looks like any
-        # other row while being the most dangerous thing in the app
-        if presets.too_short(keyword):
-            item.setIcon(icons.icon("warning", T.ERR, 14))
-            item.setForeground(QColor(T.ERR))
-            item.setText(f'{name}   ·   "{keyword}"   — TOO SHORT, will not run')
+        # a keyword this short lists most of a bag, which is either a typo or
+        # the whole point — "o" keeps Metal and Element Shard and drops the
+        # rest. The row says which one it looks like and runs either way
+        if presets.is_broad(keyword):
+            item.setIcon(icons.icon("warning", T.WARN, 14))
+            item.setForeground(QColor(T.WARN))
+            item.setText(f'{name}   ·   "{keyword}"   — matches most of a bag')
             item.setToolTip(
-                f'"{keyword}" matches almost every item name. The macro refuses '
-                f"it. Use at least {presets.MIN_KEYWORD} letters.")
+                f'"{keyword}" is a "contains" match, so it lists every item '
+                "with that letter in the name and Drop All takes all of them.\n"
+                "That is an inverse filter: use it to drop everything except "
+                "the names it misses (\"o\" keeps Metal and Element Shard).\n"
+                "Dry-run it once to see exactly what goes.")
         elif risk == "high":
             item.setIcon(icons.icon("warning", T.WARN, 14))
             item.setForeground(QColor(T.WARN))
@@ -609,32 +613,41 @@ class TemplateEditor(QWidget):
         self.name_edit.setText(data.get("name", ""))
         self.keyword_edit.setText(data.get("keyword", ""))
 
-    def _too_short(self, keyword: str) -> bool:
-        """
-        A keyword below the engine's floor never reaches the game.
+    @staticmethod
+    def _clash_reason(keyword: str) -> str:
+        return (f'"{keyword}" is already a template. The same filter twice in '
+                "the cycle means the second pass types it into an inventory the "
+                "first one already emptied.")
 
-        Refused here as well as there, because the engine only speaks up
-        mid-session, in red, after the row has been sitting in the list looking
-        fine.
+    def _note_broad(self, keyword: str) -> None:
         """
-        if not presets.too_short(keyword):
-            return False
-        self.rejected.emit(
-            f'"{keyword}" is too short for a filter. ARK matches any part of an '
-            f"item name, so it would list almost everything and Drop All would "
-            f"take the lot. Use at least {presets.MIN_KEYWORD} letters.")
-        return True
+        Say what a very short keyword will do — and then let it through.
+
+        It is a "contains" match, so one letter lists most of a bag. That reads
+        like a typo and sometimes is one, but it is also a deliberate inverse
+        filter: "o" while farming metal drops the rest and keeps Metal and
+        Element Shard, neither of which has an "o". Which one it is is the
+        person's call, not the app's, so this warns and never refuses.
+        """
+        if not presets.is_broad(keyword):
+            return
+        self.warned.emit(
+            f'"{keyword}" matches any item name containing it, so Drop All will '
+            "take most of the bag and keep only the names it misses. If that is "
+            "the point, it works — dry-run it once to see exactly what goes.")
 
     def _add(self) -> None:
         keyword = self.keyword_edit.text().strip()
-        if not keyword or keyword.lower() in self._keywords():
+        if not keyword:
             return
-        if self._too_short(keyword):
+        if keyword.lower() in self._keywords():
+            self.rejected.emit(self._clash_reason(keyword))
             return
         name = self.name_edit.text().strip() or keyword.capitalize()
         self._insert({"name": name, "keyword": keyword, "enabled": True})
         self.name_edit.clear()
         self.keyword_edit.clear()
+        self._note_broad(keyword)
         self.changed.emit()
 
     def _update(self) -> None:
@@ -649,7 +662,8 @@ class TemplateEditor(QWidget):
         clashes = {t["keyword"].lower()
                    for index, t in enumerate(self.templates())
                    if index != row and t["keyword"]}
-        if keyword.lower() in clashes or self._too_short(keyword):
+        if keyword.lower() in clashes:
+            self.rejected.emit(self._clash_reason(keyword))
             return
         enabled = item.checkState() == Qt.Checked
         name = self.name_edit.text().strip() or keyword.capitalize()
@@ -658,6 +672,7 @@ class TemplateEditor(QWidget):
         self._insert({"name": name, "keyword": keyword, "enabled": enabled}, row)
         self._loading = False
         self.list.setCurrentRow(row)
+        self._note_broad(keyword)
         self.changed.emit()
 
     def _remove(self) -> None:

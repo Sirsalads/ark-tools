@@ -213,6 +213,20 @@ Ways around it:
   instead of `berry`, so Mejoberry and Narcoberry stay in your bag.
 - **Do a dry run first.**
 
+### The inverse filter
+
+A "contains" match cuts both ways, and the sharpest keywords are sometimes the
+shortest. Farming metal, the thing you want is a two-item list — **Metal** and
+**Element Shard** — and neither name contains the letter `o`. So a template with
+the single keyword `o` lists Stone, Wood, Obsidian, Cooked Meat, Hide Boots and
+essentially everything else you picked up by accident, and Drop All clears it in
+one pass. Your Metal Pick and Metal Hatchet survive for the same reason.
+
+Instead of naming what to throw away, you name a letter the keepers do not have.
+It is the most destructive template you can write and, aimed properly, the most
+useful. The app flags it and runs it. **Dry-run it once** on a full bag before
+trusting it — the screenshot shows you the exact list that would have fallen.
+
 One known gotcha: when the game's language and the system's disagree, the
 search and the bulk action can work on different strings and Drop All does
 nothing ([report][language]). Write the keywords in the language the game is
@@ -295,13 +309,14 @@ held back** rather than sent unverified. A check that quietly degrades into no
 check, on the one failure that cannot be undone, is worse than none. Run ARK
 **borderless or windowed** and it never comes up.
 
-### Keywords have a floor
+### Very short keywords are flagged, not blocked
 
-Three letters. ARK matches any part of an item name, so `o` lists Stone, Wood,
-Cooked Meat, Hide Boots and most of a bag — the filter works exactly as designed
-and Drop All takes the lot. The template editor refuses anything shorter, the
-macro refuses to run one that is already saved, and a saved one is marked in red
-in the list.
+ARK matches any part of an item name, so `o` lists Stone, Wood, Cooked Meat,
+Hide Boots and most of a bag, and Drop All takes the lot. That is a typo about
+as often as it is the point — see [the inverse filter](#the-inverse-filter)
+below. The app cannot tell the two apart and does not try: a one- or two-letter
+keyword is marked amber in the template list, logged when you add it, and then
+run exactly as typed. Dry-run a new one once and the screenshot settles it.
 
 Two presses, not one, and that is the whole trick: typing in the filter leaves
 the **search field holding the keyboard**, so the first `Esc` only steps out of

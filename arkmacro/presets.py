@@ -12,17 +12,18 @@ risk:
 """
 from __future__ import annotations
 
-# The shortest keyword worth typing. The filter is a "contains" match, so a
-# one-letter keyword is not a filter at all: "o" lists Stone, Wood, Obsidian,
-# Cooked Meat, Hide Boots and most of a bag, and Drop All takes every one of
-# them. Three is the floor for anything that names a real resource — "sap" is
-# the shortest that does.
-MIN_KEYWORD = 3
+# A keyword this short matches a large part of any inventory, because the filter
+# is a "contains" match: "o" lists Stone, Wood, Obsidian, Cooked Meat and most of
+# a bag. That is usually a typo — and sometimes exactly the point. Filtering "o"
+# while farming metal drops all of that and keeps Metal and Element Shard, which
+# have no "o" in them, and metal tools survive for the same reason. So this is
+# flagged, loudly, and never refused: whose keyword it is is not the app's call.
+BROAD_KEYWORD = 3
 
 
-def too_short(keyword: str) -> bool:
-    """Whether a keyword is below the floor. Empty is handled by the caller."""
-    return 0 < len(str(keyword).strip()) < MIN_KEYWORD
+def is_broad(keyword: str) -> bool:
+    """Whether a keyword is short enough to match most of an inventory."""
+    return 0 < len(str(keyword).strip()) < BROAD_KEYWORD
 
 # (category, [(name, keyword, risk, note)])
 PRESETS: list[tuple[str, list[tuple[str, str, str, str]]]] = [

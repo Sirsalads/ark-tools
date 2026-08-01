@@ -535,6 +535,12 @@ class MainWindow(QWidget):
             "ARK's filter matches any part of an item name and ignores case: "
             '"stone" also lists Stone Pick and Stone Hatchet, and Drop All '
             "takes everything listed. Rows marked ⚠ carry that risk.", warn=True))
+        card.add(hint_label(
+            'That cuts both ways. A one-letter keyword is an inverse filter: "o" '
+            "lists most of a bag and drops it, keeping Metal and Element Shard — "
+            "neither name has an o in it, and your metal tools survive for the "
+            "same reason. Those rows are marked too, and they run. Dry-run a new "
+            "one once and you will see exactly what falls."))
         lay.addWidget(card)
 
         guard = Card(
@@ -1331,8 +1337,10 @@ class MainWindow(QWidget):
                     signal.connect(self._on_change)
                     break
         self.tpl_editor.changed.connect(self._on_change)
-        # a refused edit is silent in the list, so it goes to the log
+        # a refused edit is silent in the list, so it goes to the log — and so
+        # does one that went through but will drop more than it looks like
         self.tpl_editor.rejected.connect(lambda why: self._log(why, "err"))
+        self.tpl_editor.warned.connect(lambda why: self._log(why, "warn"))
         for box in (self.sp_fx, self.sp_fy):
             box.valueChanged.connect(lambda *_: self._invalidate_thumb("filter"))
         for box in (self.sp_dx, self.sp_dy):

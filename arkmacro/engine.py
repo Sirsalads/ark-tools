@@ -16,7 +16,6 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from . import winapi as w
 from .config import Config
-from .presets import MIN_KEYWORD, too_short
 
 # after a close press: long enough for the panel to be gone before the screen
 # is read, and for the game not to fold two presses into one keystroke
@@ -347,24 +346,6 @@ class MacroEngine(QThread):
         templates = d.active_templates()
         if not templates:
             self.log.emit("no template checked on the Farm page", "warn")
-            return
-
-        # A keyword this short is not a filter, and the pass would empty the bag
-        # while looking like it worked. Refused here rather than trusted to the
-        # pixel check, which cannot tell a filter that matched everything from
-        # one that matched the right thing.
-        stunted = [t for t in templates if too_short(t["keyword"])]
-        for template in stunted:
-            keyword = str(template["keyword"]).strip()
-            self.log.emit(
-                f'"{keyword}" is too short to be a filter — ARK matches any '
-                f'part of a name, so it lists almost everything and Drop All '
-                f'takes the lot. Refusing to run '
-                f'"{template.get("name") or keyword}". Use at least '
-                f'{MIN_KEYWORD} letters', "err")
-        templates = [t for t in templates if t not in stunted]
-        if not templates:
-            self.log.emit("drop pass cancelled: nothing left to run", "err")
             return
 
         self.state_changed.emit("dropping")
