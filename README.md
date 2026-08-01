@@ -262,12 +262,14 @@ Fired on a click count (**14 clicks and at least 20 s of farming** by default),
 on a timer, or by `F7`:
 
 1. pause the autoclick and press the inventory key (`I` by default);
-2. click the filter field;
-3. type the template's keyword;
-4. **read the search box** — no keyword visibly in there, no drop;
-5. click **Drop All**;
-6. repeat for every checked template, in list order;
-7. press **`Esc` twice** to close the inventory and resume farming. Nothing
+2. **wait for the panel to actually be on screen** — not for a fixed number of
+   milliseconds, but until the pixels say it is up and has stopped moving;
+3. click the filter field;
+4. type the template's keyword;
+5. **read the search box** — no keyword visibly in there, no drop;
+6. click **Drop All**, after one last look that the panel is still there;
+7. repeat for every checked template, in list order;
+8. press **`Esc` twice** to close the inventory and resume farming. Nothing
    clears the filter by hand: ARK empties the search box itself when Drop All
    fires.
 
@@ -281,8 +283,7 @@ and all. It is the one failure of this routine that cannot be walked back.
 
 So the box is read instead of trusted. Right after the field is focused, while
 it is certainly empty, the macro samples a band of pixels across it; after
-typing it samples them again. Glyphs move pixels, so the two readings **have**
-to differ:
+typing it samples them again:
 
 ```
 23:15:44 filtering "flint"
@@ -291,9 +292,33 @@ to differ:
 23:15:48 "thatch" never reached the search field — Drop All skipped, the bag keeps this one
 ```
 
-The mouse sits on the filter point for both readings, so whatever the cursor
-covers is covered identically in both and simply carries no information — which
-is why the measure is *how many* samples moved, never *all* of them.
+### Why it counts ink and not changes
+
+The obvious measure — *did these pixels change* — has a wrong answer that costs
+the bag, and it is the wrong answer in exactly the case the check exists for.
+
+A fixed wait after the inventory key is a guess. Under lag the panel is still
+coming up when it expires, so the filter click lands in the game world and the
+keyword goes nowhere. By the time the box is read the second time the panel
+**has** arrived — so the band went from the moving game world to flat inventory
+chrome, every sample moved, and a check counting moved samples reports the
+keyword landed at the precise moment the filter is empty. The lag does not defeat
+the check; it *recruits* it.
+
+So the measure is **ink**: how many samples sit away from the flattest colour in
+that same reading. The background is taken from the reading being judged, which
+makes it blind to anything that moves the whole band at once. The game world is
+busy and full of ink; an empty search box is flat and has almost none; a typed
+word puts a word's worth back. A panel arriving late makes ink *fall*, and the
+drop is refused.
+
+The check for the panel itself is the other half, and it comes first: nothing is
+typed until the strip between the two captured points stops looking like the
+world and holds still for two readings. There is one more look right before the
+Drop All click, because that is the click that cannot be walked back.
+
+The mouse sits on the filter point for every reading, so whatever the cursor
+covers is covered identically each time and carries no information either way.
 
 What it does **not** do is read *which* text is in there: `met` and `metal` both
 look like "not empty". A keyword that got in halfway still passes, and ARK's

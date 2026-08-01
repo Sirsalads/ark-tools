@@ -241,24 +241,41 @@ GLYPH = (232, 238, 240)
 cfg.drop.verify_filter = True          # this section is the check itself
 
 
+def world_at(x: int, y: int) -> tuple[int, int, int]:
+    """The game behind the panel: busy, and never the same twice across a band."""
+    return ((x * 37 + y * 11) % 256, 90 + (x % 7), 40 + (y % 5))
+
+
 class Box:
     """
     Screen where the search box fills in only when `shows_text` is set.
 
     Reads on the filter band answer for the box, everything else answers for the
     panel — the panel probes run along the line to Drop All, well below it.
+    Both bands answer for the *world* while the inventory is closed, which is
+    the truth and the whole reason `opens_after` exists: with it above zero the
+    panel is still coming up when the old fixed wait expired.
     """
 
-    def __init__(self, shows_text: bool) -> None:
+    def __init__(self, shows_text: bool, opens_after: int = 0) -> None:
         self.shows_text = shows_text
         self.filled = False
-        self.presses = 0
+        self.open = False
+        self.opens_after = opens_after  # screen reads before the panel finishes
+        self.reads = 0                  # since the inventory key went out
+
+    @property
+    def up(self) -> bool:
+        return self.open and self.reads >= self.opens_after
 
     def pixel(self, x, y):
-        if abs(y - 300) <= 8:
+        self.reads += 1
+        if abs(y - 300) <= 8:          # the search box band
+            if not self.up:
+                return world_at(x, y)
             filled = self.filled and self.shows_text and 960 <= x <= 1040
             return GLYPH if filled else BOX
-        return WORLD if self.presses else PANEL
+        return PANEL if self.up else WORLD
 
     def type_text(self, text, delay=0.0, unicode_mode=False):
         calls.append(("type", text))
@@ -271,8 +288,11 @@ class Box:
 
     def tap(self, vk, hold=0.0):
         calls.append(("key", hex(vk)))
-        if vk == 0x1B:
-            self.presses += 1
+        if vk == 0x49:                 # the inventory key toggles the panel
+            self.open = not self.open
+            self.reads = 0
+        elif vk == 0x1B:
+            self.open = False
         elif vk == 0x08:
             self.filled = False        # a wipe leaves the box empty again
 
@@ -315,6 +335,75 @@ unchecked, _ = drop_against(Box(shows_text=False))
 assert sum(1 for c in unchecked if c == ("click_at", 1400, 900)) == 2
 cfg.drop.verify_filter = True
 print("OK  Drop All only fires when the keyword is visibly in the box")
+
+# --------- 1d2) the panel that comes up late, which is the one that hurt
+# Reported after the check above was already in: "after a few loops of the farm
+# it drops everything without filtering, I think the lag skips the typing".
+#
+# It did, and the check was the reason it went through. A fixed open wait is a
+# guess, and under lag the inventory is still coming up when it expires. The
+# filter click then lands in the world, the keyword goes nowhere — and by the
+# time the box is read again the panel HAS arrived, so the band went from the
+# game world to flat inventory chrome and every single sample moved. A check
+# that counted moved samples read that as "the keyword is in there" at the
+# exact moment the filter was empty, and Drop All emptied the bag.
+#
+# Two things have to be true for that to be impossible: nothing is typed until
+# the panel is up and holding still, and a full band of ink turning into a flat
+# empty box counts as less ink, not as a change.
+
+# the measure itself, on the two readings that failure produces
+busy = [world_at(x, 300) for x in range(780, 1140, 8)]
+flat = [BOX] * len(busy)
+assert eng.MacroEngine._ink(busy) > eng.MacroEngine._ink(flat), \
+    "the game world reads flatter than an empty search box"
+assert not eng.MacroEngine._ink_grew(busy, flat), \
+    "a late panel still reads as a keyword that landed"
+assert eng.MacroEngine._ink_grew(flat, [BOX] * 30 + [GLYPH] * 12), \
+    "a keyword in an empty box does not read as one"
+
+# and end to end. `opens_after` is counted in screen reads so the panel lands in
+# one exact place: after the reading taken before typing and before the one
+# taken after it — the window the old check turned into a green light.
+late, late_engine = drop_against(Box(shows_text=False, opens_after=60))
+assert not any(c == ("click_at", 1400, 900) for c in late), \
+    "Drop All went out while the inventory was still coming up"
+assert late_engine.drops == 0
+# it still waited for the panel and ran the pass rather than bailing
+assert ("type", "thatch") in late, "it gave up instead of waiting for the panel"
+
+# a panel that never comes up at all is not a pass either
+never, never_engine = drop_against(Box(shows_text=True, opens_after=10**6))
+assert not any(c[0] == "type" for c in never), \
+    "it typed a keyword into a screen with no inventory on it"
+assert not any(c == ("click_at", 1400, 900) for c in never)
+assert never_engine.drops == 0
+
+
+# a panel that is plainly up but never holds still is the other outcome, and it
+# has to be the opposite one: refusing there would refuse every single pass on a
+# screen whose probe line happens to sit on something that moves
+class Restless(Box):
+    """Up straight away, and never twice the same."""
+
+    def __init__(self) -> None:
+        super().__init__(shows_text=True)
+        self.jitter = 0
+
+    def pixel(self, x, y):
+        colour = super().pixel(x, y)
+        if colour is PANEL:
+            self.jitter += 1
+            return (40, 44, (self.jitter * 53) % 256)
+        return colour
+
+
+restless, restless_engine = drop_against(Restless())
+assert sum(1 for c in restless if c == ("click_at", 1400, 900)) == 2, \
+    "a busy but open panel was refused"
+assert restless_engine.drops == 1
+print("OK  a late or missing inventory panel refuses the drop instead of "
+      "passing the check")
 
 # ------------------- 1e) an unreadable screen holds the drop back
 # Reported from a real session: every pass logged "the search box cannot be

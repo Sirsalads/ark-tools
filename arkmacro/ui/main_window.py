@@ -545,19 +545,21 @@ class MainWindow(QWidget):
 
         guard = Card(
             "Before every Drop All",
-            "Waiting half a second for the filter to appear is a hope, not a "
-            "check — and an unfiltered Drop All empties the whole bag. So the "
-            "macro reads the search box before and after typing: no change in "
-            "those pixels means nothing was typed, and the drop is skipped.",
+            "Waiting a fixed moment and hoping is not a check, and an unfiltered "
+            "Drop All empties the whole bag. So the macro waits for the panel to "
+            "actually be on screen, then reads the search box before and after "
+            "typing: no word in there, no drop.",
             icon="shield")
-        self.sw_verify = SwitchRow("Only drop when the keyword reached the "
-                                   "search box", self.cfg.drop.verify_filter)
+        self.sw_verify = SwitchRow("Only drop when the panel is up and the "
+                                   "keyword reached the search box",
+                                   self.cfg.drop.verify_filter)
         guard.add(self.sw_verify)
         guard.add(hint_label(
-            "It sees that there is text, not which text — a keyword that got in "
-            "halfway still passes. Turn it off only to measure how often the "
-            "check trips on your connection: the drop then goes out anyway and "
-            "the log says the box looked empty. Needs the screen to be "
+            "Under lag the inventory can still be coming up when the open wait "
+            "expires — the filter click lands in the world, the keyword goes "
+            "nowhere, and the bag is what pays. Waiting for the panel is what "
+            "stops that. It sees that there is text, not which text, so a "
+            "keyword that got in halfway still passes. Needs the screen to be "
             "readable, so borderless or windowed, foreground delivery."))
         lay.addWidget(guard)
 

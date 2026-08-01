@@ -35,6 +35,17 @@ PROBE_TOLERANCE = 16
 # how far apart the two points have to be before the probes mean anything
 PROBE_MIN_SPAN = 40
 
+# The panel has to be up before a single key is typed. A fixed wait cannot
+# promise that: under lag the inventory can still be coming up when the wait
+# expires, and then the filter click, the keyword and the Drop All click all go
+# out against whatever is on screen instead. So the wait is a floor and the
+# screen is what says when to go on.
+PANEL_SETTLE_POLL_MS = 60
+PANEL_OPEN_BUDGET_MS = 2500
+# consecutive readings that have to stop looking like the world before the panel
+# counts as up — one is a flicker, three is 180ms of inventory
+PANEL_OPEN_CONFIRMATIONS = 3
+
 # Reading the search box, to tell an empty one from one holding a keyword.
 # The box is sampled on a horizontal band around the filter point: how wide is
 # derived from the distance to Drop All, which is the only ruler there is for
@@ -42,9 +53,9 @@ PROBE_MIN_SPAN = 40
 FILTER_PROBE_REACH = 0.3          # of the filter -> Drop All distance, each way
 FILTER_PROBE_STEPS = 15           # samples across the band
 FILTER_PROBE_ROWS = (-4, 0, 4)    # and on three rows, to catch the glyph bodies
-# Two samples is the threshold on purpose. One is the caret: it blinks, and it
-# sits where the first letter would be, so a single moved pixel proves nothing.
-FILTER_CHANGED_MIN = 2
+# How many extra samples have to carry ink before the box counts as filled. Two
+# would be the caret alone, which blinks and sits where the first letter goes.
+FILTER_INK_MIN = 3
 # A wipe of the search box. The game clears the filter itself when Drop All
 # fires, so this is only for the boxes it has not cleared: the first template of
 # a pass (a human may have left something in there), a dry run, and the template
@@ -190,23 +201,53 @@ class MacroEngine(QThread):
                 colours.append(colour)
         return colours
 
+    @staticmethod
+    def _ink(samples) -> int:
+        """
+        How many samples sit away from the flattest colour in the reading.
+
+        The search box is one flat colour with a word drawn on it, so the colour
+        most of the samples share *is* the box and everything else is ink. Taking
+        that background from the same reading is the whole point: it makes the
+        measure immune to anything that moves the whole band at once.
+        """
+        if not samples:
+            return 0
+        buckets: dict[tuple, list] = {}
+        for colour in samples:
+            key = tuple(channel // (PROBE_TOLERANCE + 1) for channel in colour)
+            buckets.setdefault(key, []).append(colour)
+        background = max(buckets.values(), key=len)[0]
+        return sum(1 for colour in samples
+                   if any(abs(a - b) > PROBE_TOLERANCE
+                          for a, b in zip(colour, background)))
+
+    @classmethod
+    def _ink_grew(cls, before, after) -> bool:
+        """Whether a word's worth of ink appeared in the box."""
+        return cls._ink(after) - cls._ink(before) >= FILTER_INK_MIN
+
     def _filter_took(self, reference) -> bool | None:
         """
-        True when the search box changed after the keyword was typed.
+        True when a keyword is visibly sitting in the search box.
+
+        Not "did these pixels change" — that question has a dangerous wrong
+        answer. If the panel was still coming up when the first reading was
+        taken, the band went from the game world to flat inventory chrome and
+        every sample moved, so a check counting moved samples says yes at the
+        exact moment nothing was typed and the filter is empty. Counting ink
+        instead inverts that: the world is busy, an empty box is flat, so the
+        late panel makes ink fall and the drop is refused.
 
         None means the question could not be answered — no reference, or the
-        screen stopped reading — and the caller carries on as it always did.
+        screen stopped reading.
         """
         if reference is None:
             return None
         now = self._probe_filter()
         if now is None or len(now) != len(reference):
             return None
-        changed = sum(
-            1 for before, after in zip(reference, now)
-            if any(abs(a - b) > PROBE_TOLERANCE for a, b in zip(before, after))
-        )
-        return changed >= FILTER_CHANGED_MIN
+        return self._ink_grew(reference, now)
 
     # ------------------------------------------------ is the panel still up
     def _probe_panel(self) -> list[tuple[int, int, int]] | None:
@@ -234,6 +275,17 @@ class MacroEngine(QThread):
             colours.append(colour)
         return colours
 
+    @staticmethod
+    def _alike(one, other) -> bool:
+        """Whether two panel readings show the same thing. False if either is None."""
+        if one is None or other is None or len(one) != len(other):
+            return False
+        same = sum(
+            1 for before, after in zip(one, other)
+            if all(abs(a - b) <= PROBE_TOLERANCE for a, b in zip(before, after))
+        )
+        return same * 2 > len(one)
+
     def _panel_still_up(self, reference) -> bool | None:
         """
         True while the panel looks like it did before the close press.
@@ -246,11 +298,47 @@ class MacroEngine(QThread):
         now = self._probe_panel()
         if now is None or len(now) != len(reference):
             return None
-        same = sum(
-            1 for before, after in zip(reference, now)
-            if all(abs(a - b) <= PROBE_TOLERANCE for a, b in zip(before, after))
-        )
-        return same * 2 > len(reference)
+        return self._alike(reference, now)
+
+    def _panel_opened(self, world) -> bool | None:
+        """
+        Wait until the inventory is actually up. None when it cannot be seen.
+
+        `world` is the same strip read before the inventory key went out, so
+        "still the world" and "up and holding still" are both answerable. The
+        second half matters as much as the first: a panel caught mid-fade is a
+        panel whose search box does not have the keyboard yet, and typing into
+        that moment is how a pass ends up clicking Drop All on an empty filter.
+        """
+        if world is None:
+            return None
+        deadline = time.perf_counter() + PANEL_OPEN_BUDGET_MS / 1000.0
+        previous = None
+        covered = 0                         # consecutive readings that are not the world
+        while time.perf_counter() < deadline:
+            now = self._probe_panel()
+            if now is None:
+                return None
+            if self._alike(now, world):
+                covered, previous = 0, None  # nothing has come up yet
+            else:
+                covered += 1
+                if covered >= PANEL_OPEN_CONFIRMATIONS and self._alike(now, previous):
+                    return True             # up, and holding still
+                previous = now
+            if not self._sleep(PANEL_SETTLE_POLL_MS / 1000.0):
+                return None
+        # Out of budget. Whether that is a refusal depends on which half failed:
+        # a strip that stopped looking like the world is an open panel, even if
+        # something on it never sat perfectly still. Refusing those would refuse
+        # every pass on such a screen, which is a worse bug than the one this
+        # method exists to prevent.
+        if covered >= PANEL_OPEN_CONFIRMATIONS:
+            self.log.emit("the inventory is up but never settles — dropping "
+                          "anyway. Move the two points onto quieter parts of "
+                          "the panel if this pass goes wrong", "warn")
+            return True
+        return False
 
     def _close_inventory(self, reference) -> bool:
         """
@@ -355,9 +443,22 @@ class MacroEngine(QThread):
             self.log.emit("DRY RUN on — filtering and capturing, no Drop All "
                           "click", "warn")
 
-        # 1) open the inventory
+        # 1) open the inventory, and do not take the game's word for it. The
+        #    configured wait is a floor; the screen says when the panel is
+        #    really there. Everything after this step assumes an open panel with
+        #    a search field ready to take the keyboard, and every one of those
+        #    assumptions is wrong at once if the inventory is still on its way.
+        world = self._probe_panel() if d.verify_filter else None
         self._tap_key(d.inventory_key)
         if not self._wait(d.open_wait_ms):
+            return
+        if self._panel_opened(world) is False:
+            self.log.emit(
+                f"the inventory did not come up after {d.inventory_key} — "
+                "nothing was typed and nothing was dropped. Raise Farm - "
+                "Inventory open wait if this keeps happening", "err")
+            if not self._alike(self._probe_panel(), world):
+                self._close_inventory(self._probe_panel())
             return
 
         # ARK empties the search box itself when Drop All fires, so the macro
@@ -439,6 +540,15 @@ class MacroEngine(QThread):
                 if not self._sleep(0.6):
                     return
             else:
+                # one last look before the click nobody can walk back: the panel
+                # that was verified at the top of the pass has to still be the
+                # thing under the cursor now
+                if d.verify_filter and self._alike(self._probe_panel(), world):
+                    stale_box = True
+                    self.log.emit(
+                        "the inventory is not on screen any more — Drop All "
+                        "skipped, the bag keeps this one", "err")
+                    continue
                 self._click_point(d.dropall_point, "Drop All")
                 dropped += 1
                 if not self._wait(d.after_drop_wait_ms):

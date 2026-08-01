@@ -158,9 +158,20 @@ half-second wait and hope. If the click missed the search box, or the window los
 focus for a frame, the box stays **empty** — and **Drop All with an empty search
 box empties your entire inventory**.
 
-With this on, the app reads the search box before and after typing. If the pixels
-did not change, nothing was typed, and it skips the drop and says so in red. It is
-the one failure here that cannot be undone.
+With this on, two things have to be true before any Drop All click goes out:
+
+1. **The inventory is really on screen.** The app does not trust the open wait —
+   it watches the panel until it is up and has stopped moving. Under lag the
+   inventory can still be arriving when the wait expires, and then the click, the
+   keyword and the Drop All all go out against the game world.
+2. **The keyword is really in the box.** The app reads the search box before and
+   after typing and measures how much *ink* is in there — an empty box is flat,
+   a word is not. If no word appeared, it skips the drop and says so in red.
+
+Measuring ink rather than "did the pixels change" is the whole fix for the worst
+case: a panel that arrives between the two readings moves every pixel while the
+filter is empty, so a change-based check would wave it through and Drop All would
+take the bag.
 
 It sees *that* there is text, not *which* text — so it is a floor, not a
 guarantee. The two rules above still apply.
