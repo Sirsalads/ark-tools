@@ -1727,6 +1727,12 @@ class MainWindow(QWidget):
         if not (hold.enabled and sweep.usable(hold.area)):
             return
         if self._sweep_kind == "skin":
+            # keep the edge detector current even while standing down, or a key
+            # held throughout somebody else's sweep reads as a fresh press the
+            # moment that sweep ends and starts this one on its own
+            self._hold_was_down = w.key_is_down(
+                w.vk_from_name(hold.key if hold.mode == "manual"
+                               else hold.activate_key) or 0)
             return
         problem = self._hold_problem()
         if problem:
@@ -1784,6 +1790,8 @@ class MainWindow(QWidget):
         if not (skin.enabled and sweep.usable(skin.area)):
             return
         if self._sweep_kind == "drop":
+            self._skin_was_down = w.key_is_down(
+                w.vk_from_name(skin.activate_key) or 0)
             return
         problem = self._skin_problem()
         if problem:
@@ -2139,6 +2147,27 @@ class MainWindow(QWidget):
             self._log(f"screen changed from {old[0]}x{old[1]} to "
                       f"{width}x{height} — {name} rescaled, check it before "
                       "using it", "warn")
+
+        # The stop sign is the one area a rescale cannot save. Its box can be
+        # moved like the others, but what it holds is a remembered picture, and
+        # at a new resolution the game draws that icon at a different size — so
+        # the colours would be compared against pixels they were never taken
+        # from. That either never matches or matches something else, and the
+        # second one stops a farm for no reason. Forget it and say so.
+        stop = self.cfg.stop_sign
+        if (stop.sample and stop.area_resolution and all(stop.area_resolution)
+                and [width, height] != list(stop.area_resolution)):
+            stop.sample = []
+            stop.area = [0, 0, 0, 0]
+            self.sw_stop.switch.setChecked(False)
+            self._log(f"screen changed from {stop.area_resolution[0]}x"
+                      f"{stop.area_resolution[1]} to {width}x{height} — the "
+                      "captured stop-sign icon was dropped, because the game "
+                      "draws it at a different size now. Capture it again",
+                      "warn")
+            stop.area_resolution = [0, 0]
+        self._sync_stop_note()
+
         self._refresh_hold_status()
         self._refresh_skin_status()
 
@@ -2325,7 +2354,7 @@ class MainWindow(QWidget):
             picker = AreaPicker(shot, geo, 1, 1, logical_origin,
                                 label="STOP SIGN",
                                 title="Drag a tight box around the icon",
-                                ratio=ratio)
+                                ratio=ratio, grid=False)
         elif self._pick_area_kind == "skin":
             stops = self.sp_skin_stops.value()
             picker = AreaPicker(shot, geo, stops, 1, logical_origin,

@@ -55,9 +55,18 @@ PANEL_OPEN_CONFIRMATIONS = 3
 FILTER_PROBE_REACH = 0.3          # of the filter -> Drop All distance, each way
 FILTER_PROBE_STEPS = 15           # samples across the band
 FILTER_PROBE_ROWS = (-4, 0, 4)    # and on three rows, to catch the glyph bodies
-# How many extra samples have to carry ink before the box counts as filled. Two
-# would be the caret alone, which blinks and sits where the first letter goes.
-FILTER_INK_MIN = 3
+# A typed keyword moves a FEW of those samples. That is the whole signature, and
+# both ends of it are load-bearing.
+#
+# Too few is nothing typed — one or two is the caret, which blinks and sits
+# exactly where the first letter goes. Too many is not a keyword at all: it is
+# the panel arriving between the two readings, which repaints every sample while
+# the search box is still empty. Requiring a count inside a band says yes to a
+# word and no to both failures, and it does it sample by sample, so a band that
+# runs off the search box onto the panel behind it still works — those samples
+# simply never change and never vote.
+FILTER_CHANGED_MIN = 3
+FILTER_CHANGED_MAX = 0.70         # of the samples; above this the scene changed
 # A wipe of the search box. The game clears the filter itself when Drop All
 # fires, so this is only for the boxes it has not cleared: the first template of
 # a pass (a human may have left something in there), a dry run, and the template
@@ -179,10 +188,13 @@ class MacroEngine(QThread):
         reason as the panel probes: the game is behind other windows, so those
         screen coordinates belong to somebody else.
 
-        The mouse cursor is parked on the filter point when both readings are
-        taken, so whatever it covers is covered identically in both and simply
-        carries no information. That is why a count of moved samples is the
-        measure here, never a demand that all of them move.
+        The band is wider than the search box on most HUDs, because its width
+        comes from the distance to Drop All and not from the box. That is fine
+        and deliberate: the reading is compared sample against itself, so the
+        ones that landed on the panel instead of the box hold still and take no
+        part in the answer. The mouse cursor is parked on the filter point for
+        both readings for the same reason — whatever it covers, it covers
+        identically twice.
         """
         d = self.cfg.drop
         if self.cfg.target.mode == "background":
@@ -201,30 +213,16 @@ class MacroEngine(QThread):
         return w.screen_samples(spots)
 
     @staticmethod
-    def _ink(samples) -> int:
-        """
-        How many samples sit away from the flattest colour in the reading.
+    def _moved(before, after) -> int:
+        """How many samples changed colour between two readings of the band."""
+        return sum(1 for a, b in zip(before, after)
+                   if any(abs(x - y) > PROBE_TOLERANCE for x, y in zip(a, b)))
 
-        The search box is one flat colour with a word drawn on it, so the colour
-        most of the samples share *is* the box and everything else is ink. Taking
-        that background from the same reading is the whole point: it makes the
-        measure immune to anything that moves the whole band at once.
-        """
-        if not samples:
-            return 0
-        buckets: dict[tuple, list] = {}
-        for colour in samples:
-            key = tuple(channel // (PROBE_TOLERANCE + 1) for channel in colour)
-            buckets.setdefault(key, []).append(colour)
-        background = max(buckets.values(), key=len)[0]
-        return sum(1 for colour in samples
-                   if any(abs(a - b) > PROBE_TOLERANCE
-                          for a, b in zip(colour, background)))
-
-    @classmethod
-    def _ink_grew(cls, before, after) -> bool:
-        """Whether a word's worth of ink appeared in the box."""
-        return cls._ink(after) - cls._ink(before) >= FILTER_INK_MIN
+    @staticmethod
+    def _word_range(count: int) -> tuple[int, int]:
+        """How many moved samples count as a keyword, for a band of `count`."""
+        return FILTER_CHANGED_MIN, max(FILTER_CHANGED_MIN,
+                                       round(count * FILTER_CHANGED_MAX))
 
     def _unreadable_reason(self) -> str:
         """
@@ -259,39 +257,34 @@ class MacroEngine(QThread):
         """
         Did a word appear in the box, and the numbers it was decided on.
 
-        The numbers are half the point. "Drop All skipped" on its own is a dead
-        end for anyone trying to work out why nothing ever drops; "ink 4 -> 5,
-        needs +3" says which way it missed and by how much, which is the
-        difference between guessing at someone's machine and reading it.
+        Sample by sample, and a count inside a band. Two earlier measures each
+        failed on a real machine and both failures are worth keeping in view.
+
+        Counting *changed* samples alone said yes when the panel arrived between
+        the readings — the band went from moving world to flat chrome, every
+        sample moved, and Drop All fired on an empty filter. Counting how far
+        the reading sat from its own most common colour fixed that and broke
+        something else: the band is a fixed width derived from the distance to
+        Drop All, so it usually covers the search box AND the panel around it,
+        and against two flat regions adding a word to one of them barely moves
+        the total. That refused every keyword on a correctly configured machine.
+
+        Both are answered by asking a smaller question. Compare each sample to
+        itself, and require the count of movers to be enough for a word but too
+        few for a repaint. Samples that fell outside the box never change, so
+        they cost nothing; a repaint moves all of them at once and is over the
+        ceiling; a keyword moves a handful and lands in between.
+
+        The numbers travel with the verdict, because "Drop All skipped" alone is
+        a dead end for anyone working out why nothing ever drops.
         """
         if before is None or after is None or len(before) != len(after):
             return None, "the screen could not be read"
-        was, now = self._ink(before), self._ink(after)
-        return (now - was >= FILTER_INK_MIN,
-                f"ink {was} -> {now} of {len(after)} samples, "
-                f"needs +{FILTER_INK_MIN}")
-
-    def _filter_took(self, reference) -> bool | None:
-        """
-        True when a keyword is visibly sitting in the search box.
-
-        Not "did these pixels change" — that question has a dangerous wrong
-        answer. If the panel was still coming up when the first reading was
-        taken, the band went from the game world to flat inventory chrome and
-        every sample moved, so a check counting moved samples says yes at the
-        exact moment nothing was typed and the filter is empty. Counting ink
-        instead inverts that: the world is busy, an empty box is flat, so the
-        late panel makes ink fall and the drop is refused.
-
-        None means the question could not be answered — no reference, or the
-        screen stopped reading.
-        """
-        if reference is None:
-            return None
-        now = self._probe_filter()
-        if now is None or len(now) != len(reference):
-            return None
-        return self._ink_grew(reference, now)
+        moved = self._moved(before, after)
+        low, high = self._word_range(len(after))
+        return (low <= moved <= high,
+                f"{moved} of {len(after)} samples changed, "
+                f"a keyword is {low}-{high}")
 
     # ------------------------------------------------ is the panel still up
     def _probe_panel(self) -> list[tuple[int, int, int]] | None:
@@ -421,9 +414,16 @@ class MacroEngine(QThread):
         self._tap_key(other, hold=CLOSE_HOLD)
         if not self._wait(CLOSE_GAP_MS):
             return False
-        if self._panel_still_up(reference):
+        # three outcomes, not two: None is "the screen stopped reading", and
+        # reporting that as a clean close would be claiming something this
+        # cannot see
+        settled = self._panel_still_up(reference)
+        if settled:
             self.log.emit("the inventory is still open — check the two points "
                           "on the Farm page, and that ARK is in front", "err")
+        elif settled is None:
+            self.log.emit(f"sent {other} as well; the screen stopped reading, "
+                          "so whether the inventory closed is unknown", "warn")
         else:
             self.log.emit(f"inventory closed with {other}", "ok")
         return True

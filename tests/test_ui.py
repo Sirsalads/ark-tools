@@ -1100,7 +1100,24 @@ lines.clear()
 win._on_area_picked(500, 400, 30, 30)      # all background
 assert any("flat colour" in ln and ln.startswith("err:") for ln in lines), lines
 
+# A resolution change is the one thing a rescale cannot save here. The box could
+# be moved like the sweep areas, but what it holds is a remembered picture, and
+# the game draws that icon at a different size now — the colours would be
+# compared against pixels they were never taken from, which either never matches
+# or matches something else, and the second one stops a farm for no reason.
+lines.clear()
+win._on_area_picked(540, 440, 60, 60)
+win.sw_stop.switch.setChecked(True)
+assert win.cfg.stop_sign.sample and win.cfg.stop_sign.area_resolution == [1920, 1080]
+w_module.screen_size = lambda: (2560, 1440)
+win._maybe_rescale_area()
+assert win.cfg.stop_sign.sample == [], "a picture from another resolution survived"
+assert not win.sw_stop.switch.isChecked(), "it stayed armed with nothing to match"
+assert any("captured stop-sign icon was dropped" in ln for ln in lines), lines
+w_module.screen_size = lambda: (1920, 1080)
+
 # and forgetting it clears both halves, so nothing half-remembered survives
+win._on_area_picked(540, 440, 60, 60)
 win._forget_stop_sign()
 assert win.cfg.stop_sign.sample == [] and win.cfg.stop_sign.area == [0, 0, 0, 0]
 assert not win.sw_stop.switch.isChecked()

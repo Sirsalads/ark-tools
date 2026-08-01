@@ -210,7 +210,7 @@ class AreaPicker(QWidget):
     def __init__(self, shot: QPixmap, area: QRect, columns: int, rows: int,
                  origin: tuple[int, int] = (0, 0), label: str = "",
                  title: str = "", strip: bool = False,
-                 ratio: float = 1.0) -> None:
+                 ratio: float = 1.0, grid: bool = True) -> None:
         super().__init__(None)
         self._shot = shot
         self._columns = max(int(columns), 1)
@@ -229,6 +229,10 @@ class AreaPicker(QWidget):
         self._title = title or "Drag a box over the slots to empty"
         # a strip is swept end to end and back, not covered row by row
         self._strip = strip
+        # not every box is a path. The stop sign is a box the app will *look*
+        # at, so drawing the dots a cursor would visit and calling them stops
+        # would be describing something that never happens.
+        self._grid = grid
         self._anchor: QPoint | None = None
         self._cursor = QPoint(area.width() // 2, area.height() // 2)
 
@@ -319,7 +323,8 @@ class AreaPicker(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(QColor(T.ERR), 2))
             painter.drawRect(box)
-            self._paint_grid(painter, box)
+            if self._grid:
+                self._paint_grid(painter, box)
 
         self._paint_crosshair(painter, rect)
         self._paint_banner(painter, rect, box)
@@ -376,7 +381,13 @@ class AreaPicker(QWidget):
         painter.drawText(banner.adjusted(22, 28, -22, 0), Qt.AlignLeft,
                          self._title)
 
-        if box.isEmpty():
+        if not self._grid:
+            detail = (f"{box.width()} x {box.height()} px — keep it tight "
+                      "around the icon, then release to confirm"
+                      if not box.isEmpty() else
+                      "Drag a box around the icon and nothing else. A box with "
+                      "empty HUD in it matches half the screen. Esc cancels.")
+        elif box.isEmpty():
             detail = ("Every dot is one stop the cursor will make. Drag from "
                       "one corner to the other. Esc cancels.")
         else:

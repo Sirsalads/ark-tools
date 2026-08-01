@@ -292,27 +292,35 @@ typing it samples them again:
 23:15:48 "thatch" never reached the search field — Drop All skipped, the bag keeps this one
 ```
 
-### Why it counts ink and not changes
+### How many samples moved, and why both ends matter
 
-The obvious measure — *did these pixels change* — has a wrong answer that costs
-the bag, and it is the wrong answer in exactly the case the check exists for.
+A typed keyword moves a **few** of those samples. That is the whole signature,
+and the check is a count with a floor and a ceiling. Both ends were paid for.
 
-A fixed wait after the inventory key is a guess. Under lag the panel is still
-coming up when it expires, so the filter click lands in the game world and the
-keyword goes nowhere. By the time the box is read the second time the panel
-**has** arrived — so the band went from the moving game world to flat inventory
-chrome, every sample moved, and a check counting moved samples reports the
-keyword landed at the precise moment the filter is empty. The lag does not defeat
-the check; it *recruits* it.
+**The floor** is the obvious half: nothing typed moves nothing, so a count near
+zero is a refusal. One or two is the caret, which blinks and sits exactly where
+the first letter would go, so the floor is three.
 
-So the measure is **ink**: how many samples sit away from the flattest colour in
-that same reading. The background is taken from the reading being judged, which
-makes it blind to anything that moves the whole band at once. The game world is
-busy and full of ink; an empty search box is flat and has almost none; a typed
-word puts a word's worth back. A panel arriving late makes ink *fall*, and the
-drop is refused.
+**The ceiling** is the half that costs a bag. A fixed wait after the inventory
+key is a guess, and under lag the panel is still coming up when it expires — the
+filter click lands in the game world and the keyword goes nowhere. By the time
+the box is read again the panel **has** arrived, so the band went from moving
+world to flat inventory chrome and *every* sample moved. A check with no ceiling
+reads that as a keyword at the precise moment the filter is empty. The lag does
+not defeat the check; it *recruits* it. So more than 70% of the band moving is
+not a word, it is a repaint, and it is refused.
 
-Waiting for the panel is the other half, and it comes first: nothing is typed
+Between those two ends there is one more thing the measure has to survive, and
+getting it wrong is what made a correctly configured machine farm all day and
+drop nothing. The band's width comes from the distance to Drop All, not from the
+search box, so on most HUDs it is **wider than the box** and runs onto the panel
+around it. An earlier version scored each reading against its own most common
+colour; against two flat regions — box and chrome — adding a word to one of them
+barely moved the total, and every keyword was refused. Comparing each sample to
+itself fixes that for free: the samples that missed the box hold still and never
+vote.
+
+Waiting for the panel is a separate thing, and it comes first: nothing is typed
 until the strip between the two captured points stops looking like the world and
 holds still. But that check is a **second opinion and never a veto** — it warns
 and carries on when it cannot confirm.
@@ -320,14 +328,15 @@ and carries on when it cannot confirm.
 That distinction was learned the expensive way. Three pixel heuristics in a row,
 each able to cancel the drop on its own, is three ways for a machine to farm all
 day and drop nothing — and each was a guess about user-picked points on a
-compressed video stream. Only one of them is load-bearing: a keyword typed at a
-panel that is not there puts no ink in any box, so the ink check already refuses
-the case the panel check exists for. Anything allowed to block every drop has to
-be something that cannot be wrong, and only that one qualifies.
+compressed video stream. Only one is load-bearing: a keyword typed at a panel
+that is not there moves nothing in the band, so the count already refuses the
+case the panel check exists for. Anything allowed to block every drop has to be
+something that cannot be wrong, and only that one qualifies.
 
-Every refusal logs the numbers it decided on — `ink 4 -> 5 of 45 samples, needs
-+3` — and so does every pass that goes through. A log from a session that worked
-is the only thing that makes a log from a session that did not mean anything.
+Every refusal logs the numbers it decided on — `12 of 45 samples changed, a
+keyword is 3-31` — and so does every pass that goes through. A log from a session
+that worked is the only thing that makes a log from a session that did not mean
+anything.
 
 The mouse sits on the filter point for every reading, so whatever the cursor
 covers is covered identically each time and carries no information either way.

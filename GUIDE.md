@@ -169,24 +169,27 @@ focus for a frame, the box stays **empty** — and **Drop All with an empty sear
 box empties your entire inventory**.
 
 With this on, **one thing** has to be true before any Drop All click goes out:
-the keyword is visibly in the search box. The app reads the box before and after
-typing and measures how much *ink* is in there — an empty box is flat, a word is
-not. If no word appeared, it skips the drop and says so in red, with the numbers:
+the keyword is visibly in the search box. The app reads a band of pixels across
+the box before and after typing, and counts how many of them changed. A word
+moves a few. If not enough moved, it skips the drop and says so in red, with the
+numbers:
 
 ```
-"stone" never reached the search field — Drop All skipped (ink 4 -> 5 of 45 samples, needs +3)
+"stone" never reached the search field — Drop All skipped (0 of 45 samples changed, a keyword is 3-31)
 ```
 
-Measuring ink rather than "did the pixels change" is the whole fix for the worst
-case: a panel that arrives between the two readings moves every pixel while the
-filter is empty, so a change-based check would wave it through and Drop All would
-take the bag.
+There is a ceiling as well as a floor, and it is the important one. If the
+inventory panel arrives *between* the two readings, every pixel in the band
+changes while the search box is still empty — so a check with no ceiling would
+wave that through and Drop All would take the whole bag. Too many changed is not
+a word, it is the screen repainting, and it is refused.
 
 The app also waits for the inventory panel to appear rather than trusting a fixed
 delay, and that helps — but it is a **second opinion, never a veto**. If it cannot
 confirm the panel it says so and carries on, because a keyword typed at a panel
-that is not there puts no ink in any box and the check above refuses on its own.
-Anything allowed to block every drop has to be something that cannot be wrong.
+that is not there moves nothing in the band and the check above refuses on its
+own. Anything allowed to block every drop has to be something that cannot be
+wrong.
 
 It sees *that* there is text, not *which* text — so it is a floor, not a
 guarantee. The two rules above still apply.

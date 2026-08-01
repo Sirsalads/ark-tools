@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import random
 import sys
 import tempfile
 import time
@@ -365,15 +366,33 @@ print("OK  Drop All only fires when the keyword is visibly in the box")
 # the panel is up and holding still, and a full band of ink turning into a flat
 # empty box counts as less ink, not as a change.
 
-# the measure itself, on the two readings that failure produces
+# The measure itself, over every band a real HUD produces. The band's width
+# comes from the distance to Drop All, so it is usually wider than the search
+# box and covers the panel around it — the row marked below is the one that
+# refused every keyword on a correctly configured machine while the app insisted
+# the screen was fine.
+CHROME = (44, 49, 56)
+reader = eng.MacroEngine(cfg)
 busy = [world_at(x, 300) for x in range(780, 1140, 8)]
-flat = [BOX] * len(busy)
-assert eng.MacroEngine._ink(busy) > eng.MacroEngine._ink(flat), \
-    "the game world reads flatter than an empty search box"
-assert not eng.MacroEngine._ink_grew(busy, flat), \
-    "a late panel still reads as a keyword that landed"
-assert eng.MacroEngine._ink_grew(flat, [BOX] * 30 + [GLYPH] * 12), \
-    "a keyword in an empty box does not read as one"
+for name, before, after, expected in (
+    ("band all box, keyword typed",
+     [BOX] * 45, [BOX] * 33 + [GLYPH] * 12, True),
+    ("band half panel chrome, keyword typed",          # <- used to be refused
+     [BOX] * 23 + [CHROME] * 22,
+     [BOX] * 11 + [GLYPH] * 12 + [CHROME] * 22, True),
+    ("band mostly chrome, a short keyword",
+     [BOX] * 10 + [CHROME] * 35,
+     [BOX] * 5 + [GLYPH] * 5 + [CHROME] * 35, True),
+    ("nothing typed",
+     [BOX] * 23 + [CHROME] * 22, [BOX] * 23 + [CHROME] * 22, False),
+    ("the filter point missed the box entirely",
+     [CHROME] * 45, [CHROME] * 45, False),
+    ("the panel arrived between the two readings",
+     busy, [BOX] * len(busy), False),
+):
+    verdict, detail = reader._box_reading(before, after)
+    assert verdict is expected, f"{name}: {detail}"
+assert reader._box_reading(None, [BOX] * 45)[0] is None
 
 # and end to end. `opens_after` is counted in screen reads so the panel lands in
 # one exact place: after the reading taken before typing and before the one
@@ -422,6 +441,90 @@ assert sum(1 for c in restless if c == ("click_at", 1400, 900)) == 2, \
 assert restless_engine.drops == 1
 print("OK  a late or missing inventory panel refuses the drop instead of "
       "passing the check")
+
+# ----------- 1d3) a whole pass against a HUD that behaves like a real one
+# Everything the isolated checks cover, at once and end to end: the probe band
+# is wider than the search box and runs onto the panel behind it, the panel
+# takes a moment to come up, and every pixel arrives through a lossy stream so
+# no reading ever repeats exactly. Each of those broke a release on its own.
+class RealisticHud:
+    """
+    An ARK inventory that behaves the way the reported ones did.
+
+    The search box occupies only the middle of the probe band; the rest of the
+    band is panel chrome, which is where the ink measure came apart. Colours
+    wobble on every read, which is what a streamed session does.
+    """
+
+    BOX, CHROME, TEXT = (17, 34, 51), (44, 49, 56), (231, 236, 241)
+
+    def __init__(self, seed: int = 11, opens_after: int = 12,
+                 types: bool = True) -> None:
+        self.random = random.Random(seed)
+        self.opens_after = opens_after
+        self.types = types
+        self.open = False
+        self.text = ""
+        self.reads = 0
+
+    @property
+    def up(self) -> bool:
+        return self.open and self.reads >= self.opens_after
+
+    def _wobble(self, colour):
+        return tuple(min(255, max(0, c + self.random.randint(-3, 3)))
+                     for c in colour)
+
+    def pixel(self, x, y):
+        self.reads += 1
+        if not self.up:
+            return self._wobble(world_at(x, y))
+        if abs(y - 300) > 8:                       # panel body
+            return self._wobble(self.CHROME)
+        if not (930 <= x <= 1010):                 # band ran off the box
+            return self._wobble(self.CHROME)
+        # inside the search box: one glyph column per letter, up to the width
+        column = (x - 930) // 20
+        return self._wobble(self.TEXT if column < len(self.text) else self.BOX)
+
+    def type_text(self, text, delay=0.0, unicode_mode=False):
+        calls.append(("type", text))
+        if self.types:
+            self.text = text
+
+    def click_at(self, x, y, button="left", hold=0.0, settle=0.0):
+        calls.append(("click_at", x, y))
+        if (x, y) == (1400, 900):
+            self.text = ""                         # ARK clears its own filter
+
+    def tap(self, vk, hold=0.0):
+        calls.append(("key", hex(vk)))
+        if vk == 0x49:
+            self.open = not self.open
+            self.reads = 0
+        elif vk == 0x1B:
+            self.open = False
+        elif vk == 0x08:
+            self.text = self.text[:-1]
+
+
+real, real_engine = drop_against(RealisticHud())
+assert sum(1 for c in real if c == ("click_at", 1400, 900)) == 2, \
+    f"a correctly set up HUD dropped nothing: {real}"
+assert real_engine.drops == 1
+assert ("type", "thatch") in real and ("type", "stone") in real
+
+# the same HUD where the keys never land: no drop, on either template
+mute, mute_engine = drop_against(RealisticHud(types=False))
+assert not any(c == ("click_at", 1400, 900) for c in mute), \
+    "Drop All fired with an empty search box"
+assert mute_engine.drops == 0
+
+# and the same HUD, opening so late the first reading is still the world
+slow, slow_engine = drop_against(RealisticHud(opens_after=80, types=False))
+assert not any(c == ("click_at", 1400, 900) for c in slow)
+assert slow_engine.drops == 0
+print("OK  a realistic HUD drops when it should and never when it should not")
 
 # ------------------- 1e) an unreadable screen holds the drop back
 # Reported from a real session: every pass logged "the search box cannot be
