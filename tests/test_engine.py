@@ -1073,25 +1073,34 @@ added = with_stream - baseline
 assert 0.85 <= added <= 1.30, f"latency allowance added {added:.2f}s"
 print(f"OK  stream latency stretches every wait (+{added:.2f}s at 120ms)")
 
-# ------------------------- 13b) background delivery cannot reach a stream
-# The GeForce NOW client forwards real input from whatever has focus; a message
-# posted to its window stops at the window. Arming anyway would pay every wait
-# and send nothing into the game.
-streamed_bg = Config()
-streamed_bg.target.mode = "background"
-streamed_bg.target.platform = "geforce_now"
-streamed_bg.target.start_delay_s = 0
-streamed_bg.drop.enabled = False
-levels: list[str] = []
-refuser = eng.MacroEngine(streamed_bg)
-refuser.log.connect(lambda _m, level: levels.append(level))
-calls.clear()
-refuser.start()
-refuser.wait(3000)
-app.processEvents()
-assert not calls, f"it sent input into a stream it cannot reach: {calls}"
-assert "err" in levels, levels
-print("OK  background delivery on GeForce NOW refuses to arm, loudly")
+# ------------------------- 13b) background delivery refuses to arm, always
+# It posts messages instead of sending real input. Unreal reads Raw Input and
+# drops them; a streaming client forwards only real input, so they stop at its
+# window. And a macro delivering that way cannot read the screen either, which
+# switches off the check that holds back an unverified Drop All and the icon
+# watcher with it.
+#
+# This used to refuse only when the platform was set to GeForce NOW, which
+# protected the people who had already told the app they were streaming and
+# nobody else. Someone streaming with that setting left on native armed into it
+# and got three hours of refused drop passes. Neither half of that pair is a
+# condition worth having: the mode does not work anywhere.
+for platform in ("geforce_now", "native"):
+    background = Config()
+    background.target.mode = "background"
+    background.target.platform = platform
+    background.target.start_delay_s = 0
+    background.drop.enabled = False
+    levels: list[str] = []
+    refuser = eng.MacroEngine(background)
+    refuser.log.connect(lambda _m, level: levels.append(level))
+    calls.clear()
+    refuser.start()
+    refuser.wait(3000)
+    app.processEvents()
+    assert not calls, f"on {platform} it sent input it cannot deliver: {calls}"
+    assert "err" in levels, f"on {platform} it armed quietly: {levels}"
+print("OK  background delivery refuses to arm on any platform, loudly")
 
 # ------------------------------------------- 14) letterboxed video area
 assert ark_layout.video_area(0, 0, 1920, 1080) == (0, 0, 1920, 1080)

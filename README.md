@@ -387,7 +387,7 @@ then presses and re-reads until those pixels change:
 If four presses go by with the panel still there, it tries the other key once
 (the inventory key when you close with `Esc`, and the reverse) and says so in
 the log. **Presses to close** (1–5, under *Farm → Inventory and timings*)
-is the fallback for when the screen cannot be read — background delivery, or
+is the fallback for when the screen cannot be read, which now means one thing:
 exclusive fullscreen. One more reason to run **borderless or windowed**.
 
 After the last press the macro keeps its hands off for **two seconds**
@@ -419,8 +419,8 @@ later. Switching the profile does three things:
   anchored to the picture, so with black bars an estimate based on the window
   would land half a bar off.
 
-**Recapture your points after switching.** Background delivery is **greyed out**
-on this profile — see below.
+**Recapture your points after switching.** The HUD sits inside the video, not
+the window.
 
 ## Drop
 
@@ -648,25 +648,35 @@ dropped for inactivity.
 - If the game is not in front it stays quiet. Typing into whatever you are
   actually doing would be rude, and the stream would not see it anyway.
 
-## Foreground vs background
+## Delivery: foreground only, and why background is gone
 
-| Mode | How it sends | Notes |
-|------|--------------|-------|
-| **Foreground** (default) | `SendInput` with scancodes | Input indistinguishable from a real keyboard and mouse. Always works, but ARK has to be in front. The macro pauses by itself when you switch away and resumes when you come back. |
-| **Background** | `PostMessage` to the HWND | Lets you use the PC while farming, **but** Unreal normally reads Raw Input and ignores these messages. Test before trusting it: if nothing happens in game, go back to foreground. Not available on GeForce NOW. |
+Input goes out through `SendInput` with scancodes — indistinguishable from a real
+keyboard and mouse. ARK has to be in front; the macro pauses by itself when you
+switch away and resumes when you come back. There is one delivery mode and it is
+not a choice you have to make.
 
-There is no reliable way to click into a UE5 game in the background without
-injecting into the process, which is what anticheat looks for.
+There used to be a **background** mode that posted messages straight to the
+window, sold as "use the PC while farming". It is removed, and the reason is
+worth writing down because the removal was not a tidy-up.
 
-### Why background is impossible on GeForce NOW
+It could not drive the game. Unreal reads Raw Input and drops posted messages;
+a streaming client captures real input from whatever has focus and forwards
+that, so a message handed to its own window stops there. Either way the macro
+pays every wait in the cycle to send precisely nothing.
 
-Not "unreliable" — impossible, and no setting brings it back. The client is not
-the game: it **captures real input** from whatever has focus and forwards it
-over the network. A `PostMessage` is not real input; it is a message handed to
-the client's own window, where it stops. Nothing crosses to the server, and the
-macro would pay every wait in the cycle to send precisely nothing. So the entry
-is greyed out on that profile, and a hand-edited `config.json` that asks for it
-refuses to arm with an error in the log instead of farming into the void.
+And it could not be made safe, because it also silently switched off every check
+that reads the screen — the one holding back an unverified Drop All, and the
+stop sign. A mode that cannot farm *and* disables the guardrails has no setting
+that redeems it.
+
+The old guard was to grey the entry out when the platform dropdown said GeForce
+NOW. That protected the people who had already told the app they were streaming,
+and nobody else. One reported session was on GeForce NOW with that dropdown left
+on native: the option stayed, the macro armed, and for three hours every drop
+pass refused for want of a readable screen while the stop sign stood down. The
+log named the cause on every line and the app never acted on it. Now a stored
+config on that mode is moved to foreground and told about on the way in, and the
+engine refuses to arm if a hand-edited file puts it back.
 
 What actually gets you "farm while I use the PC", in order of how well it works:
 

@@ -378,10 +378,10 @@ window, and measures the video inside the window instead of the window itself.
 **Recapture your points after switching**, and raise the per-slot times on the
 Drop and Overcap macros: each stop costs a round trip up there.
 
-Background delivery is greyed out on this profile and no setting brings it back —
-the client only forwards *real* input, so a message posted to its window never
-enters the stream. Farming while you use the PC needs a second machine, or ARK
-streamed inside a VM.
+ARK still has to be the window in front — the client forwards only *real* input,
+so there is no way to farm a stream in the background from the same machine.
+Doing that needs a second machine, or ARK streamed inside a VM with the app
+running in the guest.
 
 ---
 

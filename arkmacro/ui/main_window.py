@@ -55,6 +55,8 @@ CAPTURE_DIR = ROOT / "captures"
 # how often unattended updating looks for a new commit. Long on purpose: this
 # fires a git fetch, and a farming session lasts hours, not seconds.
 AUTO_CHECK_MIN = 20
+# identical log lines in a row before the log starts collapsing them
+LOG_REPEAT_LIMIT = 5
 
 # ARK's hotbar, in the order the keys sit on a keyboard
 HOTBAR = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
@@ -239,6 +241,9 @@ class MainWindow(QWidget):
         self._update_pending = False
         # so the "waiting for…" line is logged once, not on every check
         self._update_held = False
+        # repeated log lines collapse after this many in a row
+        self._last_message = ""
+        self._repeats = 0
         # a pull that failed once will fail the same way every 20 minutes, so
         # unattended updating stands down for the session instead of looping
         self._auto_blocked = False
@@ -255,6 +260,7 @@ class MainWindow(QWidget):
         self._refresh_points_status()
         self._maybe_rescale_points()
         self._maybe_rescale_area()
+        self._sync_delivery_options()
         self._sync_key_watch()
         self._refresh_version()
         self.titlebar.update_pill.clicked.connect(self._open_settings)
@@ -1064,10 +1070,12 @@ class MainWindow(QWidget):
                                  0 if self.cfg.target.platform == "native" else 1,
                                  width=230)
         self.cb_platform.currentIndexChanged.connect(self._on_platform_changed)
-        self.cb_mode = combo(["Foreground (recommended)", "Background (experimental)"],
-                             0 if self.cfg.target.mode == "foreground" else 1,
-                             width=230)
-        self.cb_mode.currentIndexChanged.connect(self._on_mode_changed)
+        # Only one entry, and it is not a placeholder for a second one. Posting
+        # messages to the window instead of sending real input was offered here
+        # for a long time; it cannot work with this game and it silently turns
+        # off every check that reads the screen. See _sync_mode_note.
+        self.cb_mode = combo(["Foreground (real input)"], 0, width=230)
+        self.cb_mode.setEnabled(False)
         mgrid = FormGrid(pairs=1)
         mgrid.add("Where ARK runs", self.cb_platform)
         mgrid.add("Delivery mode", self.cb_mode)
@@ -1156,7 +1164,6 @@ class MainWindow(QWidget):
         lay.addWidget(self._updates_card())
         lay.addStretch(1)
         self._sync_feed_note()
-        self._sync_delivery_options(announce=False)
         self._sync_mode_note()
         self._sync_platform_note()
         return page
@@ -1279,32 +1286,29 @@ class MainWindow(QWidget):
         self._sync_mode_note()
         self._on_change()
 
-    def _on_mode_changed(self) -> None:
-        # the check runs on every change, not only when the platform moves: a
-        # stored config or a stray setCurrentIndex must not land on a delivery
-        # mode that cannot reach the game
-        self._sync_delivery_options()
-        self._sync_mode_note()
-
     def _sync_delivery_options(self, announce: bool = True) -> None:
         """
-        Background delivery is not offered for a streamed session.
+        Move a stored background config onto foreground, and say so once.
 
-        It cannot work: the client grabs real input and forwards it over the
-        network, so a posted message reaches its window and stops there. Leaving
-        it selectable only buys a session that farms nothing.
+        This used to be a greying-out, and it was keyed to the platform
+        dropdown — so it protected only the people who had already told the app
+        they were streaming. Someone on GeForce NOW with that dropdown left on
+        native kept the option, armed with it, and got three hours of a log
+        where every drop pass refused and the stop sign never ran. The setting
+        was the cause and the app said so on every line without ever acting.
 
         `announce` is off while the pages are still being built — the log view
         does not exist yet at that point.
         """
-        item = self.cb_mode.model().item(1)
-        if item is not None:
-            item.setEnabled(not self._streaming)
-        if self._streaming and self.cb_mode.currentIndex() == 1:
-            self.cb_mode.setCurrentIndex(0)
-            if announce:
-                self._log("background delivery cannot reach a GeForce NOW "
-                          "session — switched back to foreground", "warn")
+        if self.cfg.target.mode != "background":
+            return
+        self.cfg.target.mode = "foreground"
+        if announce:
+            self._log(
+                "delivery mode was set to background, which cannot drive this "
+                "game and switches off every check that reads the screen — "
+                "moved to foreground. That is what the refused drop passes and "
+                "the disabled stop sign were", "warn")
 
     def _sync_platform_note(self) -> None:
         if self._streaming:
@@ -1319,26 +1323,19 @@ class MainWindow(QWidget):
                 "The game is installed and running on this machine.")
 
     def _sync_mode_note(self) -> None:
-        if self._streaming:
-            self.mode_note.setText(
-                "Background is greyed out on GeForce NOW, and no setting can "
-                "bring it back: the client forwards real input from whatever "
-                "has focus, so a message posted to its window never enters the "
-                "stream. Farming while you use the PC needs a second machine, "
-                "or ARK streamed inside a VM with the macro running in the "
-                "guest — see the README.")
-            return
-        if self.cb_mode.currentIndex() == 0:
-            self.mode_note.setText(
-                "Sends real input (SendInput). Always works, but ARK has to be "
-                "in front — the macro pauses by itself when you switch away and "
-                "resumes when you come back.")
-        else:
-            self.mode_note.setText(
-                "Posts messages straight to the window (PostMessage) so you can "
-                "use the PC while farming. Unreal usually reads Raw Input and "
-                "ignores this, so test it: if nothing happens in game, go back "
-                "to foreground.")
+        self.mode_note.setText(
+            "Sends real input (SendInput). ARK has to be in front — the macro "
+            "pauses by itself when you switch away and resumes when you come "
+            "back.\n\n"
+            "There used to be a background mode here that posted messages to "
+            "the window so you could use the PC while farming. It is gone, "
+            "because it never did that. Unreal reads Raw Input and drops "
+            "posted messages, a streaming client forwards only real input, and "
+            "either way the macro loses its ability to read the screen — so "
+            "every Drop All is held back and the stop sign cannot run. It could "
+            "not farm and it could not be made safe. Farming while you use the "
+            "PC needs a second machine, or ARK in a VM with the macro in the "
+            "guest — see the README.")
 
     def _refresh_key_list(self) -> None:
         """Keep the dashboard key list showing the keys actually bound."""
@@ -1466,8 +1463,9 @@ class MainWindow(QWidget):
         drop.unicode_typing = self.chk_unicode.isChecked()
 
         target = self.cfg.target
-        target.mode = ("foreground" if self.cb_mode.currentIndex() == 0
-                       else "background")
+        # the combo has one entry now, and _pull must not be the thing that puts
+        # a stored config back onto a mode nothing can select
+        target.mode = "foreground"
         target.platform = "geforce_now" if self._streaming else "native"
         target.window_title = self.ed_window.text().strip() or "ARK"
         target.require_focus = self.sw_focus.switch.isChecked()
@@ -2776,6 +2774,24 @@ class MainWindow(QWidget):
 
     # ----------------------------------------------------------------- log
     def _log(self, message: str, level: str = "info") -> None:
+        # A message that keeps repeating is a message nobody is reading any
+        # more. One reported session logged the same six-line refusal every
+        # thirty seconds for three hours; the cause was named on every one of
+        # them and the wall of them is exactly why it was not spotted. So the
+        # first few go out in full, then it says how many and holds its tongue.
+        if message == self._last_message:
+            self._repeats += 1
+            if self._repeats == LOG_REPEAT_LIMIT:
+                self._write(f"(the line above keeps repeating — saying it once "
+                            f"every {LOG_REPEAT_LIMIT} from here)", "warn")
+            if self._repeats >= LOG_REPEAT_LIMIT and self._repeats % LOG_REPEAT_LIMIT:
+                return
+        else:
+            self._last_message = message
+            self._repeats = 0
+        self._write(message, level)
+
+    def _write(self, message: str, level: str) -> None:
         color = {"ok": T.OK, "warn": T.WARN, "err": T.ERR}.get(level, T.MUTED)
         stamp = time.strftime("%H:%M:%S")
         # messages carry window titles, which any program on the machine can

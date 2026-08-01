@@ -673,15 +673,21 @@ class MacroEngine(QThread):
         self._drop_requested = False
         cfg = self.cfg
 
-        # Posted messages cannot reach a streamed session: the GeForce NOW
-        # client grabs real input and forwards it over the network, and a
-        # WM_KEYDOWN handed to its window is not real input. Nothing would
-        # arrive in game and every wait would still be paid, so say so and stop
-        # instead of farming into the void.
-        if cfg.target.mode == "background" and cfg.target.platform == "geforce_now":
-            self.log.emit("background delivery cannot reach a GeForce NOW "
-                          "session — the client only forwards real input. "
-                          "Switch Delivery mode to foreground", "err")
+        # Posted messages do not drive this game. Unreal reads Raw Input and
+        # drops them; a streaming client forwards only real input, so they stop
+        # at its window. And a macro delivering that way cannot read the screen
+        # either, which switches off the check that holds back an unverified
+        # Drop All and the icon watcher with it.
+        #
+        # The UI no longer offers the mode and moves a stored config off it.
+        # This is the backstop for a hand-edited file, and it refuses rather
+        # than runs: arming into it bought one reported session three hours of
+        # a log that named the cause on every line while nothing worked.
+        if cfg.target.mode == "background":
+            self.log.emit("delivery mode is background, which cannot drive ARK "
+                          "and switches off every screen check — refusing to "
+                          "arm. Set target.mode to \"foreground\" in "
+                          "config.json, or just open Settings once", "err")
             self.state_changed.emit("idle")
             self._running = False
             return
