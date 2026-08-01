@@ -16,10 +16,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QPixmap  # noqa: E402
+from PySide6.QtGui import QColor, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from arkmacro import config as config_module  # noqa: E402
+from arkmacro import stopsign  # noqa: E402
 from arkmacro import updater  # noqa: E402
 from arkmacro.config import Config  # noqa: E402
 from arkmacro.ui import icons  # noqa: E402
@@ -28,6 +29,7 @@ from arkmacro.ui.main_window import (APP_NAME, NAV, PAGE_DASHBOARD,  # noqa: E40
                                      PAGE_DROP, PAGE_FARM, PAGE_LOG,
                                      PAGE_OVERCAP, PAGE_SETTINGS,
                                      MainWindow, round_trip)
+from arkmacro.engine import MacroEngine  # noqa: E402
 from arkmacro.ui.picker import ScreenPicker  # noqa: E402
 from arkmacro.ui.theme import QSS  # noqa: E402
 from arkmacro.ui.widgets import FormGrid, PresetDialog, TemplateEditor  # noqa: E402
@@ -1060,6 +1062,52 @@ for point, origin, ratio in (((1231, 621), (0, 0), 1.0),
     back, drift = round_trip(point, origin, ratio)
     assert drift <= 1, f"{point} at {ratio}x from {origin} came back {back}"
 print("OK  the display check measures the machine, and can say no")
+
+# ------------------------- 25) the stop sign is captured off the frozen shot
+# By the time the capture runs the app is back in front of the game, so reading
+# the live screen would remember the app's own window and the macro would stop
+# the moment it was hidden. The picture has to come out of the screenshot the
+# box was just dragged on.
+lines.clear()
+win._log = lambda message, level="info": lines.append(f"{level}:{message}")
+
+shot = QPixmap(200, 200)
+shot.fill(QColor(20, 22, 26))
+painter = QPainter(shot)
+painter.fillRect(40, 40, 60, 60, QColor(220, 60, 55))
+painter.fillRect(60, 60, 20, 20, QColor(240, 240, 240))
+painter.end()
+win._shot = shot
+win._shot_origin = (500, 400)
+win._pick_area_kind = "stop"
+w_module.screen_size = lambda: (1920, 1080)
+# the live screen answers something else entirely, so a capture that read it
+# instead of the screenshot is visible in the result
+w_module.screen_samples = lambda points: [(1, 2, 3)] * len(points)
+
+win._on_area_picked(540, 440, 60, 60)      # the red square, in screen coords
+assert win.cfg.stop_sign.area == [540, 440, 60, 60]
+assert win.cfg.stop_sign.sample, "nothing was captured"
+assert (1, 2, 3) not in [tuple(c) for c in win.cfg.stop_sign.sample], \
+    "it read the live screen instead of the frozen capture"
+assert any("stop sign captured" in ln for ln in lines), lines
+shades = stopsign.distinct(win.cfg.stop_sign.sample, win.cfg.stop_sign.tolerance)
+assert shades >= 2, f"the red square and the white one read as {shades} shade(s)"
+
+# a box dragged over empty HUD is flat, matches half the screen, and has to be
+# called out at capture time rather than discovered by a farm stopping at random
+lines.clear()
+win._on_area_picked(500, 400, 30, 30)      # all background
+assert any("flat colour" in ln and ln.startswith("err:") for ln in lines), lines
+
+# and forgetting it clears both halves, so nothing half-remembered survives
+win._forget_stop_sign()
+assert win.cfg.stop_sign.sample == [] and win.cfg.stop_sign.area == [0, 0, 0, 0]
+assert not win.sw_stop.switch.isChecked()
+assert "capture" in MacroEngine(win.cfg)._stop_sign_problem()
+win._log = original_log
+print("OK  the stop sign is captured off the frozen screen, and flat boxes are "
+      "refused")
 
 win.hotkeys.stop()
 win.close()

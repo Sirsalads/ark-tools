@@ -79,12 +79,22 @@ primary screen reports 1920x1080 px
 screen 1 (primary): 1920x1080 logical at (0, 0), 1x scaling -> 1920x1080 physical
 cursor at (1231, 621) round-trips through 1x scaling to (1231, 621)
   -- picked areas will land where you drag them
+screen reads fine at (1231, 621): (34, 38, 44)
 --- display check done ---
 ```
+
+Two things are being measured, and both matter. The **round trip** says picked
+areas will land where you drag them. The **screen read** says the app can see
+your screen at all — which every safety check in the app depends on, since the
+only way it knows a keyword reached the search box is by looking.
 
 **Green last line: you are fine, forget this page exists.** Red: send those lines
 along with any bug report, because they say exactly what is different about your
 machine.
+
+> If the screen-read line is red, the drop passes will refuse rather than drop
+> blind, and the log will say the same thing. Run ARK in **borderless**, not
+> exclusive fullscreen.
 
 ---
 
@@ -158,20 +168,25 @@ half-second wait and hope. If the click missed the search box, or the window los
 focus for a frame, the box stays **empty** — and **Drop All with an empty search
 box empties your entire inventory**.
 
-With this on, two things have to be true before any Drop All click goes out:
+With this on, **one thing** has to be true before any Drop All click goes out:
+the keyword is visibly in the search box. The app reads the box before and after
+typing and measures how much *ink* is in there — an empty box is flat, a word is
+not. If no word appeared, it skips the drop and says so in red, with the numbers:
 
-1. **The inventory is really on screen.** The app does not trust the open wait —
-   it watches the panel until it is up and has stopped moving. Under lag the
-   inventory can still be arriving when the wait expires, and then the click, the
-   keyword and the Drop All all go out against the game world.
-2. **The keyword is really in the box.** The app reads the search box before and
-   after typing and measures how much *ink* is in there — an empty box is flat,
-   a word is not. If no word appeared, it skips the drop and says so in red.
+```
+"stone" never reached the search field — Drop All skipped (ink 4 -> 5 of 45 samples, needs +3)
+```
 
 Measuring ink rather than "did the pixels change" is the whole fix for the worst
 case: a panel that arrives between the two readings moves every pixel while the
 filter is empty, so a change-based check would wave it through and Drop All would
 take the bag.
+
+The app also waits for the inventory panel to appear rather than trusting a fixed
+delay, and that helps — but it is a **second opinion, never a veto**. If it cannot
+confirm the panel it says so and carries on, because a keyword typed at a panel
+that is not there puts no ink in any box and the check above refuses on its own.
+Anything allowed to block every drop has to be something that cannot be wrong.
 
 It sees *that* there is text, not *which* text — so it is a floor, not a
 guarantee. The two rules above still apply.
@@ -216,7 +231,32 @@ It cannot see your food bar. It presses the slot; an empty slot presses nothing.
 Keep the stack topped up, and make sure your drop list does not throw away the
 food it is pressing.
 
-### 3.8 — The two points it clicks
+### 3.8 — Stop on an icon
+
+Some things clicking cannot fix — a broken pick, an overloaded character, a dead
+mount. The game only ever says so with an icon on screen, and the macro has no
+way to read the game. So show it the icon once.
+
+1. Get the icon on screen in ARK.
+2. **Farm → Stop on an icon → Capture the icon.** The screen freezes; drag a box
+   **tight around the icon and nothing else**.
+3. Turn on **Stop when the icon appears**.
+
+From then on it looks at that box between clicks, and the moment the icon is back
+it stops the macro — exactly what pressing `F6` does, except immediately.
+
+**Drag tight.** A box with empty HUD in it is nearly one flat colour, which
+matches half the screen and would stop your farm at random. The app counts the
+distinct shades it captured and refuses the box in red when there are too few.
+
+Two dials if it misbehaves. **Never triggers** → lower *Match needed*, or raise
+*Colour slack* (a streamed picture never arrives twice the same). **Triggers on
+its own** → raise *Match needed*, or drag a tighter box.
+
+It never looks during a drop pass, never while ARK is not in front, and a screen
+it cannot read is never a sighting.
+
+### 3.9 — The two points it clicks
 
 A drop pass clicks two things: the **search field**, then the **Drop All**
 button. Where those sit depends on your resolution and on what the HUD is
@@ -237,7 +277,7 @@ moves the cursor there without clicking so you can check it.
 No screenshot possible? **Estimate points for this resolution** computes a
 starting guess — then verify it with Test.
 
-### 3.9 — Start it
+### 3.10 — Start it
 
 Back to **Dashboard**, press **Start macro** or `F6`.
 

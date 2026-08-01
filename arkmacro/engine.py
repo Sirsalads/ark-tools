@@ -14,6 +14,8 @@ import time
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from . import stopsign
+from . import sweep
 from . import winapi as w
 from .config import Config
 
@@ -253,6 +255,22 @@ class MacroEngine(QThread):
                 f"({start[0]}, {start[1]}) and ({end[0]}, {end[1]}) did not — "
                 "report this line")
 
+    def _box_reading(self, before, after) -> tuple[bool | None, str]:
+        """
+        Did a word appear in the box, and the numbers it was decided on.
+
+        The numbers are half the point. "Drop All skipped" on its own is a dead
+        end for anyone trying to work out why nothing ever drops; "ink 4 -> 5,
+        needs +3" says which way it missed and by how much, which is the
+        difference between guessing at someone's machine and reading it.
+        """
+        if before is None or after is None or len(before) != len(after):
+            return None, "the screen could not be read"
+        was, now = self._ink(before), self._ink(after)
+        return (now - was >= FILTER_INK_MIN,
+                f"ink {was} -> {now} of {len(after)} samples, "
+                f"needs +{FILTER_INK_MIN}")
+
     def _filter_took(self, reference) -> bool | None:
         """
         True when a keyword is visibly sitting in the search box.
@@ -445,6 +463,40 @@ class MacroEngine(QThread):
         self._tap_key(f.water_key)
         return self._wait(f.gap_ms)
 
+    # ---------------------------------------------------------- stop sign
+    def _stop_sign_problem(self) -> str:
+        """Why the stop sign cannot run, or "" when it can."""
+        s = self.cfg.stop_sign
+        if self.cfg.target.mode == "background":
+            return ("background delivery never reads the screen, so there is "
+                    "nothing to watch")
+        if not sweep.usable(s.area):
+            return "no icon has been captured yet — pick one on the Farm page"
+        if len(s.sample) != len(stopsign.grid(s.area)):
+            return ("the captured icon does not match its area any more — "
+                    "capture it again")
+        return ""
+
+    def _stop_sign_seen(self) -> bool:
+        """
+        True when the watched patch has turned back into the captured icon.
+
+        A read that fails is not a sighting. The screen going unreadable is its
+        own problem and it is loud elsewhere; treating it as the icon here would
+        stop the macro for a reason that has nothing to do with the game.
+        """
+        s = self.cfg.stop_sign
+        fresh = w.screen_samples(stopsign.grid(s.area))
+        if fresh is None:
+            return False
+        if not stopsign.seen(s.sample, fresh, s.tolerance, s.match_percent):
+            return False
+        near = stopsign.score(s.sample, fresh, s.tolerance)
+        self.log.emit(f"stop sign spotted ({near}% match) — stopping, same as "
+                      "pressing the toggle key", "err")
+        self._running = False
+        return True
+
     # ------------------------------------------------------- drop routine
     def _run_drop(self) -> None:
         d = self.cfg.drop
@@ -474,14 +526,18 @@ class MacroEngine(QThread):
         self._tap_key(d.inventory_key)
         if not self._wait(d.open_wait_ms):
             return
+        # A panel this could not confirm is a warning, not a veto. It used to
+        # abort the pass, and that was a mistake: it is a second opinion on a
+        # question the search box already answers — nothing typed into a panel
+        # that is not there puts no ink in the box, and that check refuses on its
+        # own. Wrong here costs every drop of every pass, so the wrong answer it
+        # is allowed to give is the harmless one.
         if self._panel_opened(world) is False:
             self.log.emit(
-                f"the inventory did not come up after {d.inventory_key} — "
-                "nothing was typed and nothing was dropped. Raise Farm - "
-                "Inventory open wait if this keeps happening", "err")
-            if not self._alike(self._probe_panel(), world):
-                self._close_inventory(self._probe_panel())
-            return
+                f"could not confirm the inventory came up after "
+                f"{d.inventory_key} — carrying on, the search-box check still "
+                "has to pass before anything drops. If nothing ever drops, the "
+                "two captured points are the thing to move", "warn")
 
         # ARK empties the search box itself when Drop All fires, so the macro
         # only wipes it where the game has not: the first template of the pass,
@@ -510,6 +566,7 @@ class MacroEngine(QThread):
             self.log.emit(f'filtering "{keyword}"', "info")
             if not self._wait(d.after_type_wait_ms):
                 return
+            took, reading = self._box_reading(empty_box, self._probe_filter())
 
             # 4) the keyword has to be visibly in the box before anything is
             #    dropped. An unfocused field, a swallowed burst of keys, a
@@ -520,14 +577,13 @@ class MacroEngine(QThread):
             # A dry run is exempt from both refusals below: it never clicks Drop
             # All, so there is nothing to hold back, and a capture of a filter
             # that did not take is exactly the evidence someone ran it for.
-            took = self._filter_took(empty_box)
             if took is False and d.verify_filter and not d.dry_run:
                 stale_box = True
                 self.log.emit(
                     f'"{keyword}" never reached the search field — Drop All '
-                    "skipped, the bag keeps this one. Check that ARK is in "
-                    "front and that the filter point sits on the search box",
-                    "err")
+                    f"skipped, the bag keeps this one ({reading}). Check that "
+                    "ARK is in front and that the filter point sits on the "
+                    "search box", "err")
                 continue
             # A screen that cannot be read is not a pass — it is the check
             # switched off without anyone deciding to switch it off. Dropping
@@ -548,12 +604,17 @@ class MacroEngine(QThread):
                 continue
             if took is False:
                 self.log.emit(f'the search box still looks empty after typing '
-                              f'"{keyword}" — dropping anyway, the check is '
-                              "off", "warn")
+                              f'"{keyword}" ({reading}) — dropping anyway, the '
+                              "check is off", "warn")
             elif took is None and not unreadable_logged:
                 unreadable_logged = True
                 self.log.emit("the screen cannot be read — Drop All goes out "
                               "unverified, because the check is off", "warn")
+            elif took:
+                # said out loud on the way through, not only when refusing: a log
+                # from a session that worked is the only thing that makes a log
+                # from a session that did not mean anything
+                self.log.emit(f'"{keyword}" is in the box ({reading})', "info")
 
             # 5) Drop All — with the filter on, only what is listed falls
             if d.dry_run:
@@ -563,15 +624,6 @@ class MacroEngine(QThread):
                 if not self._sleep(0.6):
                     return
             else:
-                # one last look before the click nobody can walk back: the panel
-                # that was verified at the top of the pass has to still be the
-                # thing under the cursor now
-                if d.verify_filter and self._alike(self._probe_panel(), world):
-                    stale_box = True
-                    self.log.emit(
-                        "the inventory is not on screen any more — Drop All "
-                        "skipped, the bag keeps this one", "err")
-                    continue
                 self._click_point(d.dropall_point, "Drop All")
                 dropped += 1
                 if not self._wait(d.after_drop_wait_ms):
@@ -669,8 +721,19 @@ class MacroEngine(QThread):
         self.state_changed.emit("farming")
         self.log.emit("macro armed", "ok")
 
+        stop_ok = cfg.stop_sign.enabled
+        if stop_ok:
+            problem = self._stop_sign_problem()
+            if problem:
+                stop_ok = False
+                self.log.emit(f"stop sign off for this run: {problem}", "err")
+            else:
+                self.log.emit("stop sign armed — the macro stops on its own if "
+                              "that icon shows up", "ok")
+
         last_drop = time.perf_counter()
         last_feed = time.perf_counter()
+        last_look = time.perf_counter()
         clicks_since_drop = 0
         paused_reason = ""
 
@@ -730,6 +793,16 @@ class MacroEngine(QThread):
                 if not self._feed():
                     break
                 last_feed = time.perf_counter()
+
+            # The stop sign sits here for the same reason feeding does: past the
+            # focus gate, and never inside a drop pass. Checked before the click
+            # rather than after, so the click that would have followed the icon
+            # appearing is the one that does not happen.
+            if (stop_ok and time.perf_counter() - last_look
+                    >= cfg.stop_sign.poll_ms / 1000.0):
+                last_look = time.perf_counter()
+                if self._stop_sign_seen():
+                    break
 
             # autoclick
             started = time.perf_counter()

@@ -312,10 +312,22 @@ busy and full of ink; an empty search box is flat and has almost none; a typed
 word puts a word's worth back. A panel arriving late makes ink *fall*, and the
 drop is refused.
 
-The check for the panel itself is the other half, and it comes first: nothing is
-typed until the strip between the two captured points stops looking like the
-world and holds still for two readings. There is one more look right before the
-Drop All click, because that is the click that cannot be walked back.
+Waiting for the panel is the other half, and it comes first: nothing is typed
+until the strip between the two captured points stops looking like the world and
+holds still. But that check is a **second opinion and never a veto** — it warns
+and carries on when it cannot confirm.
+
+That distinction was learned the expensive way. Three pixel heuristics in a row,
+each able to cancel the drop on its own, is three ways for a machine to farm all
+day and drop nothing — and each was a guess about user-picked points on a
+compressed video stream. Only one of them is load-bearing: a keyword typed at a
+panel that is not there puts no ink in any box, so the ink check already refuses
+the case the panel check exists for. Anything allowed to block every drop has to
+be something that cannot be wrong, and only that one qualifies.
+
+Every refusal logs the numbers it decided on — `ink 4 -> 5 of 45 samples, needs
++3` — and so does every pass that goes through. A log from a session that worked
+is the only thing that makes a log from a session that did not mean anything.
 
 The mouse sits on the filter point for every reading, so whatever the cursor
 covers is covered identically each time and carries no information either way.
@@ -579,6 +591,38 @@ What it cannot do is **see your food bar**. It presses the slot; an empty slot
 presses nothing, and nothing in the log will say so. Keep the stack topped up,
 and remember `raw meat` or `cooked` as a drop keyword would throw away the very
 food this is pressing — the drop list and the feed slots have to agree.
+
+## Stop on an icon
+
+**Farm → Stop on an icon.** Show the app an icon once; it stops the macro the
+moment that icon comes back.
+
+A broken pick, an overloaded character, a dead mount — the game says all of it
+on screen and none of it anywhere the app can reach. It cannot read the game, so
+it is shown the picture instead: capture freezes the screen, you drag a box
+around the icon, and the colours inside are remembered as a grid of samples.
+While farming it re-reads that grid between clicks and counts how many still
+match. Enough of them, and it stops exactly as the toggle hotkey would.
+
+A count with slack rather than an image compare, because two things are always
+true of this picture: it is drawn over a moving world, so its edges and
+transparent parts never repeat; and on a streamed session the whole frame is
+lossy, so flat colour arrives a few values off. An exact compare would never
+fire. A loose count still only matches the icon, because the alternative to the
+icon is not a similar icon — it is a different part of the screen, which misses
+almost everywhere.
+
+The one way to get this wrong is a box with empty HUD in it. That is nearly one
+flat colour, and flat colour matches half the screen — the macro would stop at
+random for the rest of the session. So capture counts the distinct shades it
+found and refuses the box in red when there are too few, at the moment you drag
+it rather than an hour into a farm.
+
+Two dials. **Never triggers** → lower *Match needed* or raise *Colour slack*.
+**Triggers on its own** → raise *Match needed* or drag a tighter box. It never
+looks during a drop pass, never while ARK is not in front, and a screen it
+cannot read is never a sighting — that is a different problem, loud elsewhere,
+and stopping the farm for it would be stopping for nothing.
 
 ## Anti-AFK
 

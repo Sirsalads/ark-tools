@@ -163,6 +163,39 @@ class AutoFeed:
 
 
 @dataclass
+class StopSign:
+    """
+    Watches one small patch of screen and stops the macro when it changes to a
+    remembered picture.
+
+    An icon appearing is the game saying something that no amount of clicking
+    will fix — a broken tool, an encumbered character, a dead dino. The macro
+    cannot read the game, but it can be shown the icon once and told to look for
+    it. When it sees it, it stops exactly as if the toggle hotkey had been
+    pressed, because that is what you would have done.
+
+    `sample` is the remembered picture: a grid of colours read from `area` at
+    capture time. Matching is a count of samples still within tolerance, not an
+    exact image compare, because a streamed picture never repeats a frame
+    exactly and an icon drawn over a moving world never sits on the same
+    background twice.
+    """
+
+    enabled: bool = False
+    area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])   # x,y,w,h
+    area_resolution: list[int] = field(default_factory=lambda: [0, 0])
+    sample: list[list[int]] = field(default_factory=list)           # [[r,g,b], ...]
+    # per-channel slack on one sample. Generous on purpose: video compression
+    # moves flat colour around by more than you would think.
+    tolerance: int = 34
+    # how much of the grid has to still match, as a percentage. Not 100: the icon
+    # sits on whatever the world is doing behind it, and its edges bleed.
+    match_percent: int = 78
+    # how often to look while farming. Cheap — one small blit — but not free.
+    poll_ms: int = 400
+
+
+@dataclass
 class App:
     check_updates_on_start: bool = True
     # pull and restart without being asked, so a new commit reaches the running
@@ -185,6 +218,7 @@ class Config:
     auto_feed: AutoFeed = field(default_factory=AutoFeed)
     hold_drop: HoldDrop = field(default_factory=HoldDrop)
     skin_overcap: SkinOvercap = field(default_factory=SkinOvercap)
+    stop_sign: StopSign = field(default_factory=StopSign)
     app: App = field(default_factory=App)
 
     # -------------------------------------------------------------- io
@@ -354,6 +388,28 @@ def _sanitize(cfg: "Config") -> None:
     skin.activate_key = str(skin.activate_key).strip().lower()
     skin.mode = ("hold" if str(skin.mode).strip().lower() == "hold"
                  else "toggle")
+    stop = cfg.stop_sign
+    stop.area = _rect(stop.area)
+    stop.area_resolution = _point(stop.area_resolution)
+    stop.tolerance = _count(stop.tolerance, 34, 4, 90)
+    stop.match_percent = _count(stop.match_percent, 78, 40, 100)
+    stop.poll_ms = _count(stop.poll_ms, 400, 100, 5000)
+    # A remembered picture is a list of RGB triples and nothing else. Anything
+    # that is not one is dropped rather than repaired: a half-read sample would
+    # compare against the wrong points and stop the macro on nothing.
+    if isinstance(stop.sample, list):
+        clean = []
+        for colour in stop.sample:
+            if (isinstance(colour, (list, tuple)) and len(colour) == 3
+                    and all(isinstance(c, int) and 0 <= c <= 255 for c in colour)):
+                clean.append(list(colour))
+            else:
+                clean = []
+                break
+        stop.sample = clean
+    else:
+        stop.sample = []
+
     if isinstance(drop.templates, list):
         # an empty list is a real choice, so it is kept as-is
         drop.templates = [t for t in (_template(item) for item in drop.templates)

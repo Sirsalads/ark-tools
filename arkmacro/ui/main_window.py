@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 from .. import __version__
 from .. import layout as ark_layout
+from .. import stopsign
 from .. import sweep
 from .. import updater
 from .. import winapi as w
@@ -453,6 +454,7 @@ class MainWindow(QWidget):
         self._farm_clicking(lay)
         self._farm_drops(lay)
         lay.addWidget(self._auto_feed_card())
+        lay.addWidget(self._stop_sign_card())
         self._farm_points(lay)
         lay.addStretch(1)
         self._sync_trigger_fields()
@@ -714,6 +716,83 @@ class MainWindow(QWidget):
             "whatever you are doing instead. What it cannot do is see your food "
             "bar — it presses the slot, and an empty slot presses nothing."))
         return feed
+
+    def _stop_sign_card(self) -> Card:
+        """Watch for an icon and stop, because some things clicking cannot fix."""
+        card = Card(
+            "Stop on an icon", icon="eye", subtitle=
+            "Show the app an icon once and it stops the macro the moment that "
+            "icon comes back — a broken tool, an overloaded character, "
+            "anything the game only says on screen. Exactly what pressing the "
+            "toggle key does, except it happens the instant it appears.")
+        self.sw_stop = SwitchRow("Stop when the icon appears",
+                                 self.cfg.stop_sign.enabled)
+        card.add(self.sw_stop)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.btn_stop_pick = QPushButton("  Capture the icon")
+        self.btn_stop_pick.setObjectName("primary")
+        self.btn_stop_pick.setCursor(Qt.PointingHandCursor)
+        self.btn_stop_pick.setIcon(icons.icon("target", "#ffffff", 15))
+        self.btn_stop_pick.setIconSize(QSize(15, 15))
+        self.btn_stop_pick.setToolTip(
+            "Get the icon on screen in ARK first, then click this")
+        self.btn_stop_pick.clicked.connect(
+            lambda: self._begin_area_pick(kind="stop"))
+        self.btn_stop_clear = QPushButton("  Forget it")
+        self.btn_stop_clear.setCursor(Qt.PointingHandCursor)
+        self.btn_stop_clear.setIcon(icons.icon("trash", T.TEXT_DIM, 15))
+        self.btn_stop_clear.setIconSize(QSize(15, 15))
+        self.btn_stop_clear.clicked.connect(self._forget_stop_sign)
+        row.addWidget(self.btn_stop_pick, 1)
+        row.addWidget(self.btn_stop_clear, 1)
+        card.add(row)
+
+        sgrid = FormGrid(pairs=2)
+        self.sp_stop_tol = spin(4, 90, self.cfg.stop_sign.tolerance, "", 2)
+        sgrid.add("Colour slack", self.sp_stop_tol,
+                  "How far a colour may drift and still count. Raise it on a "
+                  "streamed session, where nothing arrives exactly")
+        self.sp_stop_match = spin(40, 100, self.cfg.stop_sign.match_percent,
+                                  " %", 2)
+        sgrid.add("Match needed", self.sp_stop_match,
+                  "How much of the box has to match. Lower it if it never "
+                  "triggers, raise it if it triggers on its own")
+        self.sp_stop_poll = spin(100, 3000, self.cfg.stop_sign.poll_ms, " ms", 50)
+        sgrid.add("Look every", self.sp_stop_poll)
+        card.add(sgrid)
+
+        self.stop_note = hint_label("")
+        card.add(self.stop_note)
+        card.add(hint_label(
+            "Drag the box tight around the icon and nothing else. A box with "
+            "empty HUD in it matches half the screen and would stop the macro "
+            "at random, so the app counts the shades it captured and says so "
+            "when there are too few. It looks between clicks and never during "
+            "a drop pass, and a screen it cannot read is never a sighting."))
+        return card
+
+    def _forget_stop_sign(self) -> None:
+        self.cfg.stop_sign.sample = []
+        self.cfg.stop_sign.area = [0, 0, 0, 0]
+        self.sw_stop.switch.setChecked(False)
+        self._log("stop sign forgotten", "warn")
+        self._sync_stop_note()
+        self._pull()
+        self._save()
+
+    def _sync_stop_note(self) -> None:
+        s = self.cfg.stop_sign
+        if not sweep.usable(s.area) or not s.sample:
+            self.stop_note.setText("No icon captured yet. Bring the icon up in "
+                                   "ARK, then hit Capture the icon.")
+            return
+        shades = stopsign.distinct(s.sample, s.tolerance)
+        self.stop_note.setText(
+            f"Watching a {s.area[2]}x{s.area[3]} px box at "
+            f"({s.area[0]}, {s.area[1]}) — {len(s.sample)} samples, {shades} "
+            "distinct shades.")
 
     # ----------------------------------------------------------------- drop
     def _page_drop(self) -> QWidget:
@@ -1330,6 +1409,8 @@ class MainWindow(QWidget):
             self.ed_hold_activate,
             self.sw_skin.switch, self.cb_skin_key, self.sp_skin_stops,
             self.sp_skin_dwell, self.ed_skin_activate, self.cb_skin_mode,
+            self.sw_stop.switch, self.sp_stop_tol, self.sp_stop_match,
+            self.sp_stop_poll,
         ]
         for widget in widgets:
             for name in ("valueChanged", "currentIndexChanged", "textChanged",
@@ -1418,6 +1499,13 @@ class MainWindow(QWidget):
         feed.food_key = self.cb_food.currentText()
         feed.water_key = self.cb_water.currentText()
         self._sync_feed_note()
+
+        stop = self.cfg.stop_sign
+        stop.enabled = self.sw_stop.switch.isChecked()
+        stop.tolerance = self.sp_stop_tol.value()
+        stop.match_percent = self.sp_stop_match.value()
+        stop.poll_ms = self.sp_stop_poll.value()
+        self._sync_stop_note()
 
         afk = self.cfg.anti_afk
         afk.enabled = self.sw_afk.switch.isChecked()
@@ -2233,7 +2321,12 @@ class MainWindow(QWidget):
         # conversion itself or the two get added together
         logical_origin = (geo.x(), geo.y())
         self._log_screen_geometry(geo, ratio, shot)
-        if self._pick_area_kind == "skin":
+        if self._pick_area_kind == "stop":
+            picker = AreaPicker(shot, geo, 1, 1, logical_origin,
+                                label="STOP SIGN",
+                                title="Drag a tight box around the icon",
+                                ratio=ratio)
+        elif self._pick_area_kind == "skin":
             stops = self.sp_skin_stops.value()
             picker = AreaPicker(shot, geo, stops, 1, logical_origin,
                                 label=f"SKIN OVERCAP STRIP · {stops} STOPS",
@@ -2250,18 +2343,64 @@ class MainWindow(QWidget):
         picker.show()
 
     def _on_area_picked(self, x: int, y: int, width: int, height: int) -> None:
-        target = (self.cfg.skin_overcap if self._pick_area_kind == "skin"
-                  else self.cfg.hold_drop)
+        kind = self._pick_area_kind
+        target = {"skin": self.cfg.skin_overcap,
+                  "stop": self.cfg.stop_sign}.get(kind, self.cfg.hold_drop)
         target.area = [x, y, width, height]
         target.area_resolution = list(w.screen_size())
         self._drop_picker()
         self._picking = False
         self._restore_window()
-        name = ("skin overcap strip" if self._pick_area_kind == "skin"
-                else "hold-to-drop area")
+        name = {"skin": "skin overcap strip",
+                "stop": "stop sign area"}.get(kind, "hold-to-drop area")
         self._log(f"{name} set: {width}x{height} px at ({x}, {y})", "ok")
+        if kind == "stop":
+            self._capture_stop_sign()
         self._pull()
         self._save()
+
+    def _capture_stop_sign(self) -> None:
+        """
+        Remember what is in the stop-sign box right now.
+
+        Taken from the frozen screenshot the picker was just dragged on, not
+        from the live screen: by the time this runs the app is back in front and
+        the icon is behind it. That is also why the icon has to be on screen
+        while picking, which the button says.
+        """
+        s = self.cfg.stop_sign
+        spots = stopsign.grid(s.area)
+        fresh = self._sample_shot(spots)
+        if fresh is None:
+            fresh = w.screen_samples(spots)
+        if not fresh:
+            s.sample = []
+            self._log("could not read that area — nothing captured", "err")
+            return
+        s.sample = [list(colour) for colour in fresh]
+        shades = stopsign.distinct(s.sample, s.tolerance)
+        self._log(f"stop sign captured: {len(s.sample)} samples, {shades} "
+                  "distinct shades", "ok")
+        if shades < 3:
+            self._log("that patch is nearly one flat colour, so it will match "
+                      "half the screen and stop the macro at random — pick a "
+                      "box tight around the icon itself", "err")
+        self._sync_stop_note()
+
+    def _sample_shot(self, spots) -> list[tuple[int, int, int]] | None:
+        """Those screen points read out of the screenshot the picker used."""
+        shot, origin = self._shot, self._shot_origin
+        if shot is None or shot.isNull():
+            return None
+        image = shot.toImage()
+        read = []
+        for x, y in spots:
+            local_x, local_y = x - origin[0], y - origin[1]
+            if not (0 <= local_x < image.width() and 0 <= local_y < image.height()):
+                return None
+            colour = image.pixelColor(local_x, local_y)
+            read.append((colour.red(), colour.green(), colour.blue()))
+        return read
 
     def _pick_target_screen(self):
         hwnd = w.find_window(self.cfg.target.window_title)

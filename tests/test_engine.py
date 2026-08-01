@@ -19,6 +19,7 @@ from PySide6.QtCore import QCoreApplication  # noqa: E402
 from arkmacro import engine as eng  # noqa: E402
 from arkmacro import layout as ark_layout  # noqa: E402
 from arkmacro import presets  # noqa: E402
+from arkmacro import stopsign as ark_stop  # noqa: E402
 from arkmacro import sweep as ark_sweep  # noqa: E402
 from arkmacro.config import Config  # noqa: E402
 from arkmacro.hotkeys import (MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT,  # noqa: E402
@@ -384,11 +385,16 @@ assert late_engine.drops == 0
 # it still waited for the panel and ran the pass rather than bailing
 assert ("type", "thatch") in late, "it gave up instead of waiting for the panel"
 
-# a panel that never comes up at all is not a pass either
+# A panel that never comes up at all drops nothing either — and note what is
+# NOT asserted here. It is allowed to go ahead and type. Refusing the pass on
+# the panel check alone was a veto that could only ever be a second opinion, and
+# a wrong second opinion costs every drop of every pass on a machine where those
+# two points do not happen to read cleanly. The search box is the gate: a
+# keyword typed at a screen with no inventory on it puts no ink in any box, so
+# the drop is refused there, where the evidence actually is.
 never, never_engine = drop_against(Box(shows_text=True, opens_after=10**6))
-assert not any(c[0] == "type" for c in never), \
-    "it typed a keyword into a screen with no inventory on it"
-assert not any(c == ("click_at", 1400, 900) for c in never)
+assert not any(c == ("click_at", 1400, 900) for c in never), \
+    "Drop All went out with no inventory on screen"
 assert never_engine.drops == 0
 
 
@@ -806,6 +812,75 @@ split.write_text(json.dumps({"hold_drop": {"mode": "hold",
 assert Config.load(split).hold_drop.mode == "hold"
 split.unlink()
 print("OK  a hold-to-drop config from before the split keeps its behaviour")
+
+# --------------------------------- 8b) the stop sign, and what it must not do
+# Show it an icon, and the macro stops the moment the icon comes back. The
+# hazard is the mirror image of the drop guard's: there, a wrong yes empties a
+# bag; here, a wrong yes stops a farm that was fine, and a wrong no leaves the
+# macro swinging at something that will never break.
+ICON = [[20, 22, 26]] * 30 + [[220, 60, 55]] * 20 + [[240, 240, 240]] * 14
+
+# the same picture, arriving over a lossy stream: every value nudged
+streamed = [[min(255, c + 9) for c in colour] for colour in ICON]
+assert ark_stop.seen(ICON, streamed, 34, 78), "compression alone lost the icon"
+assert ark_stop.score(ICON, streamed, 34) == 100
+
+# a different part of the screen misses on nearly every sample
+elsewhere = [[130, 190, 95]] * len(ICON)
+assert not ark_stop.seen(ICON, elsewhere, 34, 78), "it matched open world"
+
+# half the box covered by something else is not the icon any more
+half = ICON[:32] + [[130, 190, 95]] * (len(ICON) - 32)
+assert not ark_stop.seen(ICON, half, 34, 78), f"{ark_stop.score(ICON, half, 34)}%"
+
+# a grid is the same points in the same order for the same box, or a remembered
+# reading compares against pixels it was never taken from
+box = [400, 300, 64, 64]
+assert ark_stop.grid(box) == ark_stop.grid(box)
+assert len(ark_stop.grid(box)) == 64
+assert all(400 <= x < 464 and 300 <= y < 364 for x, y in ark_stop.grid(box))
+assert ark_stop.grid([0, 0, 0, 0]) == []
+
+# a patch of flat colour would match half the screen, and the app has to be able
+# to say so before it is armed rather than after it has stopped a good farm
+assert ark_stop.distinct([[20, 22, 26]] * 40, 34) == 1
+assert ark_stop.distinct(ICON, 34) == 3
+
+cfg.stop_sign.enabled = True
+cfg.stop_sign.area = [400, 300, 64, 64]
+watcher = eng.MacroEngine(cfg)
+assert "capture" in watcher._stop_sign_problem(), watcher._stop_sign_problem()
+cfg.stop_sign.sample = [[20, 22, 26]] * 64
+assert watcher._stop_sign_problem() == "", watcher._stop_sign_problem()
+
+# an unreadable screen is not a sighting: it is a different problem, loud
+# somewhere else, and stopping the farm for it would be stopping for nothing
+levels.clear()
+watcher.log.connect(lambda _m, level: levels.append(level))
+watcher._running = True
+assert watcher._stop_sign_seen() is False, "None from the screen read as the icon"
+assert watcher._running, "an unreadable screen stopped the macro"
+
+# and when the icon really is there, it stops — the same stop the toggle does
+original_samples = FakeW.screen_samples
+FakeW.screen_samples = staticmethod(lambda points: [(20, 22, 26)] * len(points))
+try:
+    assert watcher._stop_sign_seen() is True
+    assert not watcher._running, "it saw the icon and kept farming"
+    assert "err" in levels, "it stopped without saying why"
+    # something else on that spot leaves it alone
+    watcher._running = True
+    FakeW.screen_samples = staticmethod(
+        lambda points: [(130, 190, 95)] * len(points))
+    assert watcher._stop_sign_seen() is False
+    assert watcher._running
+finally:
+    FakeW.screen_samples = original_samples
+cfg.stop_sign.enabled = False
+cfg.stop_sign.sample = []
+cfg.stop_sign.area = [0, 0, 0, 0]
+print("OK  the stop sign knows its icon from the world, and never from a blind "
+      "screen")
 
 # ------------------------------------------------- 9) preset risk flags
 assert presets.risk_of("stone")[0] == "high"
