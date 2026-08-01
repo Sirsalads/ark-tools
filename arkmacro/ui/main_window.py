@@ -1331,6 +1331,8 @@ class MainWindow(QWidget):
                     signal.connect(self._on_change)
                     break
         self.tpl_editor.changed.connect(self._on_change)
+        # a refused edit is silent in the list, so it goes to the log
+        self.tpl_editor.rejected.connect(lambda why: self._log(why, "err"))
         for box in (self.sp_fx, self.sp_fy):
             box.valueChanged.connect(lambda *_: self._invalidate_thumb("filter"))
         for box in (self.sp_dx, self.sp_dy):

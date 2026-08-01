@@ -289,8 +289,19 @@ long, unambiguous keywords, and nothing in the bag you cannot afford to lose.
 The switch is **Farm → Before every Drop All**. Turning it off does not
 skip the check, it only stops it from blocking: the drop goes out anyway and the
 log says the box looked empty, which is the honest way to measure how often it
-trips on your connection. It needs a readable screen — borderless or windowed,
-foreground delivery — and says so in the log when it cannot see.
+trips on your connection. **It needs a readable screen.** In exclusive fullscreen Windows hands back no
+pixels at all, so the check cannot run — and when it cannot run, **the drop is
+held back** rather than sent unverified. A check that quietly degrades into no
+check, on the one failure that cannot be undone, is worse than none. Run ARK
+**borderless or windowed** and it never comes up.
+
+### Keywords have a floor
+
+Three letters. ARK matches any part of an item name, so `o` lists Stone, Wood,
+Cooked Meat, Hide Boots and most of a bag — the filter works exactly as designed
+and Drop All takes the lot. The template editor refuses anything shorter, the
+macro refuses to run one that is already saved, and a saved one is marked in red
+in the list.
 
 Two presses, not one, and that is the whole trick: typing in the filter leaves
 the **search field holding the keyboard**, so the first `Esc` only steps out of

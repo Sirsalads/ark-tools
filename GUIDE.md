@@ -165,6 +165,15 @@ the one failure here that cannot be undone.
 It sees *that* there is text, not *which* text — so it is a floor, not a
 guarantee. The two rules above still apply.
 
+**It needs to be able to read your screen.** In exclusive fullscreen Windows
+returns no pixels, the check cannot run, and rather than drop unverified the
+macro **holds the drop back and says so in red**. If every pass is refusing,
+that is what happened: switch ARK to borderless.
+
+**Keywords must be at least 3 letters.** `o` is not a filter — it lists Stone,
+Wood, Cooked Meat, Hide Boots and most of your bag, and Drop All takes all of
+it. The app refuses anything shorter and marks saved ones in red.
+
 ### 3.5 — Dry run
 
 Runs the whole cycle — opens, filters, types — and **never clicks Drop All**.

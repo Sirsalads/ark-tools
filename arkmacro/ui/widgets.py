@@ -480,6 +480,7 @@ class TemplateEditor(QWidget):
     """
 
     changed = Signal()
+    rejected = Signal(str)   # why an edit was refused, for the log
 
     def __init__(self, templates: list[dict],
                  parent: QWidget | None = None) -> None:
@@ -556,7 +557,17 @@ class TemplateEditor(QWidget):
         item.setCheckState(Qt.Checked if template.get("enabled") else Qt.Unchecked)
         item.setData(Qt.UserRole, {"name": name, "keyword": keyword})
         item.setText(f'{name}   ·   "{keyword}"')
-        if risk == "high":
+        # a keyword already saved below the floor gets the loudest treatment the
+        # list has: the engine will refuse it, and until then it looks like any
+        # other row while being the most dangerous thing in the app
+        if presets.too_short(keyword):
+            item.setIcon(icons.icon("warning", T.ERR, 14))
+            item.setForeground(QColor(T.ERR))
+            item.setText(f'{name}   ·   "{keyword}"   — TOO SHORT, will not run')
+            item.setToolTip(
+                f'"{keyword}" matches almost every item name. The macro refuses '
+                f"it. Use at least {presets.MIN_KEYWORD} letters.")
+        elif risk == "high":
             item.setIcon(icons.icon("warning", T.WARN, 14))
             item.setForeground(QColor(T.WARN))
             item.setToolTip(f"Risk: {note}")
@@ -598,9 +609,27 @@ class TemplateEditor(QWidget):
         self.name_edit.setText(data.get("name", ""))
         self.keyword_edit.setText(data.get("keyword", ""))
 
+    def _too_short(self, keyword: str) -> bool:
+        """
+        A keyword below the engine's floor never reaches the game.
+
+        Refused here as well as there, because the engine only speaks up
+        mid-session, in red, after the row has been sitting in the list looking
+        fine.
+        """
+        if not presets.too_short(keyword):
+            return False
+        self.rejected.emit(
+            f'"{keyword}" is too short for a filter. ARK matches any part of an '
+            f"item name, so it would list almost everything and Drop All would "
+            f"take the lot. Use at least {presets.MIN_KEYWORD} letters.")
+        return True
+
     def _add(self) -> None:
         keyword = self.keyword_edit.text().strip()
         if not keyword or keyword.lower() in self._keywords():
+            return
+        if self._too_short(keyword):
             return
         name = self.name_edit.text().strip() or keyword.capitalize()
         self._insert({"name": name, "keyword": keyword, "enabled": True})
@@ -620,7 +649,7 @@ class TemplateEditor(QWidget):
         clashes = {t["keyword"].lower()
                    for index, t in enumerate(self.templates())
                    if index != row and t["keyword"]}
-        if keyword.lower() in clashes:
+        if keyword.lower() in clashes or self._too_short(keyword):
             return
         enabled = item.checkState() == Qt.Checked
         name = self.name_edit.text().strip() or keyword.capitalize()

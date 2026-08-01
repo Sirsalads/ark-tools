@@ -127,6 +127,22 @@ editor.name_edit.setText("Renamed in place")
 editor._update()
 assert editor.templates()[0]["name"] == "Renamed in place", "a row blocked itself"
 
+# a keyword too short to be a filter is refused, with a reason for the log
+refusals: list[str] = []
+editor.rejected.connect(refusals.append)
+count = len(editor.templates())
+editor.name_edit.setText("Stone")
+editor.keyword_edit.setText("o")
+editor._add()
+assert len(editor.templates()) == count, '"o" was added as a keyword'
+assert refusals and "too short" in refusals[-1], refusals
+# and Save cannot sneak one in either
+editor.list.setCurrentRow(0)
+keep = editor.templates()[0]["keyword"]
+editor.keyword_edit.setText("st")
+editor._update()
+assert editor.templates()[0]["keyword"] == keep, "Save let a short keyword in"
+
 # rename the selected row, keeping its checked state
 win.stack.setCurrentIndex(PAGE_FARM)
 editor.list.setCurrentRow(0)

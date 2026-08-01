@@ -12,6 +12,18 @@ risk:
 """
 from __future__ import annotations
 
+# The shortest keyword worth typing. The filter is a "contains" match, so a
+# one-letter keyword is not a filter at all: "o" lists Stone, Wood, Obsidian,
+# Cooked Meat, Hide Boots and most of a bag, and Drop All takes every one of
+# them. Three is the floor for anything that names a real resource — "sap" is
+# the shortest that does.
+MIN_KEYWORD = 3
+
+
+def too_short(keyword: str) -> bool:
+    """Whether a keyword is below the floor. Empty is handled by the caller."""
+    return 0 < len(str(keyword).strip()) < MIN_KEYWORD
+
 # (category, [(name, keyword, risk, note)])
 PRESETS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
     ("Wood & trees", [

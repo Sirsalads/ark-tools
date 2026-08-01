@@ -123,6 +123,11 @@ cfg.drop.templates = [
     {"name": "Disabled", "keyword": "wood", "enabled": False},
     {"name": "Stone", "keyword": "stone", "enabled": True},
 ]
+# This harness runs against an unreadable screen (FakeW.screen_pixel is None by
+# default), which now means the safety check refuses to drop. These sections are
+# about the order of actions and the triggers, so the check is off for them and
+# the sections that test it turn it back on.
+cfg.drop.verify_filter = False
 cfg.drop.open_wait_ms = 10
 cfg.drop.close_wait_ms = 10
 cfg.drop.after_type_wait_ms = 10
@@ -233,6 +238,7 @@ print(f"OK  the close checks the panel: 1 press when 1 is enough, "
 # would empty the entire inventory. So the box is read before and after.
 BOX = (18, 22, 26)
 GLYPH = (232, 238, 240)
+cfg.drop.verify_filter = True          # this section is the check itself
 
 
 class Box:
@@ -306,9 +312,80 @@ assert blind[esc - 1] == ("key", hex(0x08)), blind[esc - 4:esc]
 # with the check off it goes out anyway — the setting is a real switch
 cfg.drop.verify_filter = False
 unchecked, _ = drop_against(Box(shows_text=False))
-cfg.drop.verify_filter = True
 assert sum(1 for c in unchecked if c == ("click_at", 1400, 900)) == 2
+cfg.drop.verify_filter = True
 print("OK  Drop All only fires when the keyword is visibly in the box")
+
+# ------------------- 1e) an unreadable screen holds the drop back
+# Reported from a real session: every pass logged "the search box cannot be
+# read" and dropped anyway, on a machine running ARK in exclusive fullscreen
+# where no pixel can be read at all. A check that degrades to no check, on the
+# one failure that cannot be undone, is worse than no check.
+cfg.drop.verify_filter = True
+calls.clear()
+levels: list[str] = []
+blind_engine = eng.MacroEngine(cfg)          # FakeW.screen_pixel returns None
+blind_engine.log.connect(lambda _m, level: levels.append(level))
+blind_engine._running = True
+blind_engine._run_drop()
+assert not any(c == ("click_at", 1400, 900) for c in calls), \
+    "Drop All went out on a screen that cannot be read"
+assert "err" in levels, "it held the drop back without saying so"
+assert blind_engine.drops == 0, "an empty pass counted"
+
+# with the check off, the same screen drops as before: opting out is still a
+# real option, it just has to be an opt-out
+cfg.drop.verify_filter = False
+calls.clear()
+opted_out = eng.MacroEngine(cfg)
+opted_out.log.connect(lambda _m, _l: None)
+opted_out._running = True
+opted_out._run_drop()
+assert sum(1 for c in calls if c == ("click_at", 1400, 900)) == 2
+cfg.drop.verify_filter = True
+print("OK  a screen that cannot be read holds Drop All back, unless told not to")
+
+# ------------------- 1f) a keyword too short to be a filter is refused
+# Also from that session: a template named "Stone" whose keyword was the single
+# letter "o". ARK matches any part of a name, so "o" lists Stone, Wood, Cooked
+# Meat, Hide Boots and most of a bag — the filter worked, and it emptied the
+# inventory. No delay tuning fixes that; the app should never have accepted it.
+assert presets.too_short("o") and presets.too_short("st")
+assert not presets.too_short("sap") and not presets.too_short("thatch")
+assert not presets.too_short(""), "empty is the caller's business, not too short"
+
+calls.clear()
+levels.clear()
+cfg.drop.verify_filter = False
+cfg.drop.templates = [
+    {"name": "Stone", "keyword": "o", "enabled": True},
+    {"name": "Thatch", "keyword": "thatch", "enabled": True},
+]
+mixed = eng.MacroEngine(cfg)
+mixed.log.connect(lambda _m, level: levels.append(level))
+mixed._running = True
+mixed._run_drop()
+assert not any(c == ("type", "o") for c in calls), '"o" was typed into the filter'
+assert ("type", "thatch") in calls, "the usable template was dropped too"
+assert "err" in levels, "the refusal was silent"
+
+# and one that is nothing but short keywords does not open the inventory at all
+calls.clear()
+cfg.drop.templates = [{"name": "Stone", "keyword": "o", "enabled": True}]
+only_short = eng.MacroEngine(cfg)
+only_short.log.connect(lambda _m, _l: None)
+only_short._running = True
+only_short._run_drop()
+assert not any(c == ("click_at", 1400, 900) for c in calls)
+assert not any(c == ("key", hex(0x49)) for c in calls), \
+    "it opened the inventory for a pass that could not run"
+
+cfg.drop.templates = [
+    {"name": "Thatch", "keyword": "thatch", "enabled": True},
+    {"name": "Disabled", "keyword": "wood", "enabled": False},
+    {"name": "Stone", "keyword": "stone", "enabled": True},
+]
+print("OK  a keyword too short to be a filter never reaches the game")
 
 # ------------------------------------------------- 2) dry run never drops
 calls.clear()
@@ -325,6 +402,9 @@ assert not any(c == ("click_at", 1400, 900) for c in calls), \
 assert any(c == ("type", "thatch") for c in calls), "dry run did not filter"
 assert shots == ["thatch", "stone"], f"captures requested: {shots}"
 cfg.drop.dry_run = False
+# back to the unreadable screen for the trigger sections: with the check on,
+# nothing would drop there and the triggers are not what is under test
+cfg.drop.verify_filter = False
 print("OK  dry run filters, captures and drops nothing")
 
 # ------------------------------------------------- 3) click cadence

@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from . import winapi as w
 from .config import Config
+from .presets import MIN_KEYWORD, too_short
 
 # after a close press: long enough for the panel to be gone before the screen
 # is read, and for the game not to fold two presses into one keystroke
@@ -50,6 +51,7 @@ FILTER_CHANGED_MIN = 2
 # a pass (a human may have left something in there), a dry run, and the template
 # after a drop that was skipped. Longer than any sane keyword.
 CLEAR_KEYS = 24
+
 
 
 class MacroEngine(QThread):
@@ -347,6 +349,24 @@ class MacroEngine(QThread):
             self.log.emit("no template checked on the Farm page", "warn")
             return
 
+        # A keyword this short is not a filter, and the pass would empty the bag
+        # while looking like it worked. Refused here rather than trusted to the
+        # pixel check, which cannot tell a filter that matched everything from
+        # one that matched the right thing.
+        stunted = [t for t in templates if too_short(t["keyword"])]
+        for template in stunted:
+            keyword = str(template["keyword"]).strip()
+            self.log.emit(
+                f'"{keyword}" is too short to be a filter — ARK matches any '
+                f'part of a name, so it lists almost everything and Drop All '
+                f'takes the lot. Refusing to run '
+                f'"{template.get("name") or keyword}". Use at least '
+                f'{MIN_KEYWORD} letters', "err")
+        templates = [t for t in templates if t not in stunted]
+        if not templates:
+            self.log.emit("drop pass cancelled: nothing left to run", "err")
+            return
+
         self.state_changed.emit("dropping")
         names = ", ".join(str(t.get("name") or t["keyword"]) for t in templates)
         self.log.emit(f"--- drop pass: {names} ---", "warn")
@@ -393,8 +413,11 @@ class MacroEngine(QThread):
             #    Drop All on an unfiltered inventory empties the whole bag. That
             #    is the one failure of this routine nobody can walk back, so it
             #    is checked instead of waited out.
+            # A dry run is exempt from both refusals below: it never clicks Drop
+            # All, so there is nothing to hold back, and a capture of a filter
+            # that did not take is exactly the evidence someone ran it for.
             took = self._filter_took(empty_box)
-            if took is False and d.verify_filter:
+            if took is False and d.verify_filter and not d.dry_run:
                 stale_box = True
                 self.log.emit(
                     f'"{keyword}" never reached the search field — Drop All '
@@ -402,14 +425,30 @@ class MacroEngine(QThread):
                     "front and that the filter point sits on the search box",
                     "err")
                 continue
+            # A screen that cannot be read is not a pass — it is the check
+            # switched off without anyone deciding to switch it off. Dropping
+            # anyway is what turns one bad frame into an empty inventory, so the
+            # unreadable case now refuses exactly like a failed one.
+            if took is None and d.verify_filter and not d.dry_run:
+                stale_box = True
+                if not unreadable_logged:
+                    unreadable_logged = True
+                    self.log.emit(
+                        "the screen cannot be read, so the keyword cannot be "
+                        "confirmed and Drop All is being held back. ARK is "
+                        "almost certainly in EXCLUSIVE FULLSCREEN — switch it "
+                        "to borderless and this goes away. To drop without the "
+                        "check, turn off Farm - Before every Drop All and "
+                        "accept the risk", "err")
+                continue
             if took is False:
                 self.log.emit(f'the search box still looks empty after typing '
                               f'"{keyword}" — dropping anyway, the check is '
                               "off", "warn")
             elif took is None and not unreadable_logged:
                 unreadable_logged = True
-                self.log.emit("the search box cannot be read — Drop All goes "
-                              "out unverified this pass", "warn")
+                self.log.emit("the screen cannot be read — Drop All goes out "
+                              "unverified, because the check is off", "warn")
 
             # 5) Drop All — with the filter on, only what is listed falls
             if d.dry_run:
