@@ -2126,7 +2126,39 @@ class MainWindow(QWidget):
 
         ok, detail = self._round_trip_cursor()
         self._log(detail, "ok" if ok else "err")
+
+        readable, reading = self._probe_reads()
+        self._log(reading, "ok" if readable else "err")
+        ok = ok and readable
+
         self._log("--- display check done ---", "ok" if ok else "err")
+
+    def _probe_reads(self) -> tuple[bool, str]:
+        """
+        Can the app actually read pixels off this screen?
+
+        This check used to stop at coordinates and report a clean bill of health
+        on a machine where every single drop pass was refusing for want of a
+        readable screen. Coordinates were never the whole pipeline: the guards
+        that hold Drop All back all end in a screen read, and a green check that
+        does not perform one is a green check that means nothing.
+        """
+        point = w.get_cursor_pos()
+        colour = w.screen_pixel(*point)
+        if colour is None:
+            return False, (f"the screen cannot be read at {point} — this is why "
+                           "drop passes refuse. ARK in EXCLUSIVE FULLSCREEN does "
+                           "this; so does a driver that keeps the desktop off "
+                           "limits. Try borderless")
+        band = w.screen_samples([(point[0] + step, point[1]) for step in range(8)])
+        if band is None or len(band) != 8:
+            return False, (f"single pixels read at {point} but a strip of them "
+                           "did not — report this line")
+        flat = len({tuple(sample) for sample in band}) == 1
+        return True, (f"screen reads fine at {point}: {colour}"
+                      + (", and the strip beside it is one flat colour — fine on "
+                         "a plain background, worth re-running over the game"
+                         if flat else ""))
 
     def _round_trip_cursor(self) -> tuple[bool, str]:
         """

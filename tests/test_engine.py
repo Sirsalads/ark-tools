@@ -110,6 +110,18 @@ class FakeW:
     def screen_pixel(_x, _y):
         return None
 
+    # the real one grabs the whole box in one blit; here it just answers point
+    # by point, so whatever a test patches onto screen_pixel drives both
+    @staticmethod
+    def screen_samples(points):
+        read = []
+        for x, y in points:
+            colour = FakeW.screen_pixel(x, y)
+            if colour is None:
+                return None
+            read.append(colour)
+        return read
+
 
 eng.w = FakeW
 

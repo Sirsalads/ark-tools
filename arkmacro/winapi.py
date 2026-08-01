@@ -321,8 +321,58 @@ user32.ReleaseDC.argtypes = (wintypes.HWND, wintypes.HDC)
 user32.ReleaseDC.restype = ctypes.c_int
 gdi32.GetPixel.argtypes = (wintypes.HDC, ctypes.c_int, ctypes.c_int)
 gdi32.GetPixel.restype = wintypes.COLORREF
+gdi32.CreateCompatibleDC.argtypes = (wintypes.HDC,)
+gdi32.CreateCompatibleDC.restype = wintypes.HDC
+gdi32.CreateCompatibleBitmap.argtypes = (wintypes.HDC, ctypes.c_int, ctypes.c_int)
+gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+gdi32.SelectObject.argtypes = (wintypes.HDC, wintypes.HGDIOBJ)
+gdi32.SelectObject.restype = wintypes.HGDIOBJ
+gdi32.BitBlt.argtypes = (wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                         ctypes.c_int, wintypes.HDC, ctypes.c_int, ctypes.c_int,
+                         wintypes.DWORD)
+gdi32.BitBlt.restype = wintypes.BOOL
+gdi32.DeleteObject.argtypes = (wintypes.HGDIOBJ,)
+gdi32.DeleteObject.restype = wintypes.BOOL
+gdi32.DeleteDC.argtypes = (wintypes.HDC,)
+gdi32.DeleteDC.restype = wintypes.BOOL
 
 CLR_INVALID = 0xFFFFFFFF
+SRCCOPY = 0x00CC0020
+# Without this flag the blit skips layered and overlay surfaces — which is most
+# of what matters here, because a streaming client's video is exactly that.
+CAPTUREBLT = 0x40000000
+BI_RGB = 0
+DIB_RGB_COLORS = 0
+# above this many pixels a single grab is not worth it, and the points get read
+# one at a time instead
+SAMPLE_AREA_MAX = 2_000_000
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ("biSize", wintypes.DWORD),
+        ("biWidth", wintypes.LONG),
+        ("biHeight", wintypes.LONG),
+        ("biPlanes", wintypes.WORD),
+        ("biBitCount", wintypes.WORD),
+        ("biCompression", wintypes.DWORD),
+        ("biSizeImage", wintypes.DWORD),
+        ("biXPelsPerMeter", wintypes.LONG),
+        ("biYPelsPerMeter", wintypes.LONG),
+        ("biClrUsed", wintypes.DWORD),
+        ("biClrImportant", wintypes.DWORD),
+    ]
+
+
+class BITMAPINFO(ctypes.Structure):
+    _fields_ = [("bmiHeader", BITMAPINFOHEADER),
+                ("bmiColors", wintypes.DWORD * 3)]
+
+
+gdi32.GetDIBits.argtypes = (wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
+                            wintypes.UINT, ctypes.c_void_p,
+                            ctypes.POINTER(BITMAPINFO), wintypes.UINT)
+gdi32.GetDIBits.restype = ctypes.c_int
 
 
 def list_windows() -> list[tuple[int, str]]:
@@ -415,6 +465,64 @@ def screen_size() -> tuple[int, int]:
     return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
 
+def screen_region(x: int, y: int, width: int,
+                  height: int) -> list[tuple[int, int, int]] | None:
+    """
+    Row-major RGB of a screen rectangle, or None when it cannot be read.
+
+    Blitting the rectangle into a bitmap and reading that is not the obvious way
+    to get a few pixels — GetPixel is one call. It is the way that works. A
+    streaming client (GeForce NOW, Moonlight) and a game in borderless both put
+    their picture on a layered or overlay surface, and GetPixel on the desktop DC
+    does not see those at all: it hands back CLR_INVALID, the caller reads that
+    as "this screen cannot be read", and every check that depends on the screen
+    quietly stops working. CAPTUREBLT is what includes those surfaces, and it is
+    the same path the area picker's screenshot takes — which is why picking an
+    area worked on machines where the probes were blind.
+    """
+    width, height = int(width), int(height)
+    if width <= 0 or height <= 0:
+        return None
+    screen = user32.GetDC(None)
+    if not screen:
+        return None
+    memory = bitmap = None
+    pixels = None
+    try:
+        memory = gdi32.CreateCompatibleDC(screen)
+        if not memory:
+            return None
+        bitmap = gdi32.CreateCompatibleBitmap(screen, width, height)
+        if not bitmap:
+            return None
+        previous = gdi32.SelectObject(memory, bitmap)
+        copied = gdi32.BitBlt(memory, 0, 0, width, height, screen,
+                              int(x), int(y), SRCCOPY | CAPTUREBLT)
+        if copied:
+            info = BITMAPINFO()
+            info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            info.bmiHeader.biWidth = width
+            info.bmiHeader.biHeight = -height        # negative: rows top-down
+            info.bmiHeader.biPlanes = 1
+            info.bmiHeader.biBitCount = 32
+            info.bmiHeader.biCompression = BI_RGB
+            buffer = (ctypes.c_ubyte * (width * height * 4))()
+            if gdi32.GetDIBits(memory, bitmap, 0, height, buffer,
+                               ctypes.byref(info), DIB_RGB_COLORS) == height:
+                pixels = buffer
+        gdi32.SelectObject(memory, previous)
+    finally:
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if memory:
+            gdi32.DeleteDC(memory)
+        user32.ReleaseDC(None, screen)
+    if pixels is None:
+        return None
+    return [(pixels[i + 2], pixels[i + 1], pixels[i])
+            for i in range(0, len(pixels), 4)]
+
+
 def screen_pixel(x: int, y: int) -> tuple[int, int, int] | None:
     """
     Colour on screen at (x, y), or None when it cannot be read.
@@ -423,6 +531,10 @@ def screen_pixel(x: int, y: int) -> tuple[int, int, int] | None:
     ask the game, but the panel is right there on screen. Exclusive fullscreen
     hands back nothing, which is one more reason the app asks for borderless.
     """
+    region = screen_region(x, y, 1, 1)
+    if region:
+        return region[0]
+    # The blit could not run at all. GetPixel sees less, but less is not none.
     hdc = user32.GetDC(None)
     if not hdc:
         return None
@@ -433,6 +545,34 @@ def screen_pixel(x: int, y: int) -> tuple[int, int, int] | None:
     if value == CLR_INVALID:
         return None
     return value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
+
+
+def screen_samples(points) -> list[tuple[int, int, int]] | None:
+    """
+    Colours at several screen points, read in one grab where that is sensible.
+
+    The probes ask for a few dozen points inside a small box. Reading them one
+    at a time is a few dozen blits of the whole desktop; reading the box once
+    and picking the points out of it is one.
+    """
+    spots = [(int(x), int(y)) for x, y in points]
+    if not spots:
+        return []
+    left = min(x for x, _ in spots)
+    top = min(y for _, y in spots)
+    width = max(x for x, _ in spots) - left + 1
+    height = max(y for _, y in spots) - top + 1
+    if width * height <= SAMPLE_AREA_MAX:
+        region = screen_region(left, top, width, height)
+        if region is not None and len(region) == width * height:
+            return [region[(y - top) * width + (x - left)] for x, y in spots]
+    read = []
+    for x, y in spots:
+        colour = screen_pixel(x, y)
+        if colour is None:
+            return None
+        read.append(colour)
+    return read
 
 
 def client_rect(hwnd: int) -> tuple[int, int, int, int] | None:

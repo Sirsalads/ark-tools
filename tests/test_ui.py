@@ -1013,10 +1013,29 @@ print("OK  only areas that sat on the primary screen get rescaled")
 lines.clear()
 win._log = lambda message, level="info": lines.append(f"{level}:{message}")
 w_module.dpi_awareness = lambda: "per-monitor v2"
+w_module.screen_pixel = lambda x, y: (30 + x % 5, 40, 50)
+w_module.screen_samples = lambda points: [w_module.screen_pixel(x, y)
+                                          for x, y in points]
 win._check_display()
 assert any("DPI awareness" in ln for ln in lines), lines
 assert any(ln.startswith("ok:") and "round-trips" in ln for ln in lines), lines
+assert any(ln.startswith("ok:") and "screen reads fine" in ln for ln in lines), \
+    lines
 assert not any(ln.startswith("err:") for ln in lines), lines
+
+# A screen that hands back nothing is the state this machine was actually in
+# while the check reported a clean bill of health: every drop pass was refusing
+# for want of a readable screen, and the check never once read a pixel. Green
+# has to mean the guards can do their job.
+lines.clear()
+w_module.screen_pixel = lambda x, y: None
+w_module.screen_samples = lambda points: None
+win._check_display()
+assert any(ln.startswith("err:") and "cannot be read" in ln for ln in lines), lines
+assert lines[-1].startswith("err:"), lines
+w_module.screen_pixel = lambda x, y: (30 + x % 5, 40, 50)
+w_module.screen_samples = lambda points: [w_module.screen_pixel(x, y)
+                                          for x, y in points]
 
 # a cursor Windows reports somewhere the app cannot place is a real failure,
 # and has to read as one

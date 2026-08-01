@@ -190,16 +190,13 @@ class MacroEngine(QThread):
         if not any(start) or not any(end) or span < PROBE_MIN_SPAN:
             return None
         reach = max(round(span * FILTER_PROBE_REACH), 12)
-        colours = []
-        for row in FILTER_PROBE_ROWS:
-            for step in range(FILTER_PROBE_STEPS):
-                fraction = step / (FILTER_PROBE_STEPS - 1)
-                x = round(start[0] - reach + 2 * reach * fraction)
-                colour = w.screen_pixel(x, start[1] + row)
-                if colour is None:
-                    return None
-                colours.append(colour)
-        return colours
+        spots = [
+            (round(start[0] - reach + 2 * reach * step / (FILTER_PROBE_STEPS - 1)),
+             start[1] + row)
+            for row in FILTER_PROBE_ROWS
+            for step in range(FILTER_PROBE_STEPS)
+        ]
+        return w.screen_samples(spots)
 
     @staticmethod
     def _ink(samples) -> int:
@@ -226,6 +223,35 @@ class MacroEngine(QThread):
     def _ink_grew(cls, before, after) -> bool:
         """Whether a word's worth of ink appeared in the box."""
         return cls._ink(after) - cls._ink(before) >= FILTER_INK_MIN
+
+    def _unreadable_reason(self) -> str:
+        """
+        Why the screen cannot be read, as far as this can actually be told.
+
+        The old message asserted exclusive fullscreen. It was a guess dressed as
+        a finding, and on a streamed session it was simply wrong — the screen was
+        readable and the app was using a call that cannot see a streaming
+        client's picture. Guessing loudly sent someone looking at the one setting
+        that was not the problem, so this only says what it knows.
+        """
+        d = self.cfg.drop
+        if self.cfg.target.mode == "background":
+            return ("Delivery mode is background, which never reads the screen "
+                    "— the game is behind other windows there. Switch to "
+                    "foreground to get the check back")
+        start, end = d.filter_point, d.dropall_point
+        if not any(start) or not any(end):
+            return "the filter and Drop All points are not both captured"
+        span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+        if span < PROBE_MIN_SPAN:
+            return (f"the two captured points are only {span}px apart, too close "
+                    "to measure the panel with — recapture them")
+        if w.screen_pixel(*start) is None:
+            return ("Windows hands back nothing for that pixel. ARK in "
+                    "EXCLUSIVE FULLSCREEN does this — try borderless")
+        return (f"the points read fine on their own but the strip between "
+                f"({start[0]}, {start[1]}) and ({end[0]}, {end[1]}) did not — "
+                "report this line")
 
     def _filter_took(self, reference) -> bool | None:
         """
@@ -265,15 +291,11 @@ class MacroEngine(QThread):
         span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         if not any(end) or span < PROBE_MIN_SPAN:
             return None
-        colours = []
-        for fraction in PANEL_PROBES:
-            x = round(start[0] + (end[0] - start[0]) * fraction)
-            y = round(start[1] + (end[1] - start[1]) * fraction)
-            colour = w.screen_pixel(x, y)
-            if colour is None:
-                return None
-            colours.append(colour)
-        return colours
+        return w.screen_samples([
+            (round(start[0] + (end[0] - start[0]) * fraction),
+             round(start[1] + (end[1] - start[1]) * fraction))
+            for fraction in PANEL_PROBES
+        ])
 
     @staticmethod
     def _alike(one, other) -> bool:
@@ -515,13 +537,14 @@ class MacroEngine(QThread):
                 stale_box = True
                 if not unreadable_logged:
                     unreadable_logged = True
+                    reason = self._unreadable_reason()
                     self.log.emit(
                         "the screen cannot be read, so the keyword cannot be "
-                        "confirmed and Drop All is being held back. ARK is "
-                        "almost certainly in EXCLUSIVE FULLSCREEN — switch it "
-                        "to borderless and this goes away. To drop without the "
-                        "check, turn off Farm - Before every Drop All and "
-                        "accept the risk", "err")
+                        f"confirmed and Drop All is being held back. {reason}. "
+                        "Run Settings - Display check: it now says whether "
+                        "pixels can be read at all. To drop without the check, "
+                        "turn off Farm - Before every Drop All and accept the "
+                        "risk", "err")
                 continue
             if took is False:
                 self.log.emit(f'the search box still looks empty after typing '

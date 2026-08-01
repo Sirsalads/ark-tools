@@ -71,4 +71,48 @@ w.client_rect = lambda hwnd: None
 assert w.find_window("ark") == GAME, "a missing rect must not disqualify"
 print("OK  a window with no readable rect is still a candidate")
 
+# -------------------------------- 7) reading pixels, in one grab or many
+# The engine asks for a few dozen points inside a small box every time it checks
+# whether a keyword landed. Reading them out of one blit is the fast path; the
+# point-by-point path is what has to answer when the blit cannot run, and it is
+# the one that used to be the only path — through GetPixel, which cannot see a
+# streaming client's picture and reported the whole screen unreadable because
+# of it.
+# First against the real thing, which only means anything on Windows. The blit
+# is a chain of six GDI calls through ctypes, and a wrong signature in any of
+# them is a crash or a garbage answer that no amount of mocking would show.
+real = w.screen_region(0, 0, 4, 3)
+if real is None:
+    print("..  screen_region read nothing here (expected off Windows)")
+else:
+    assert len(real) == 12, f"asked for 4x3, got {len(real)} pixels"
+    assert all(len(px) == 3 and all(0 <= c <= 255 for c in px) for px in real), \
+        real[:4]
+    assert w.screen_pixel(0, 0) == real[0], "the single read disagrees with the grab"
+    for _ in range(200):                    # a leak here would exhaust GDI handles
+        assert w.screen_region(0, 0, 4, 3) is not None
+    print("..  screen_region reads the real desktop, 200 grabs without leaking")
+
+GRID = {(x, y): (x % 256, y % 256, (x + y) % 256)
+        for x in range(100, 140) for y in range(50, 60)}
+
+w.screen_region = lambda x, y, width, height: [
+    GRID[(px, py)] for py in range(y, y + height) for px in range(x, x + width)
+]
+spots = [(101, 51), (137, 58), (120, 55)]
+assert w.screen_samples(spots) == [GRID[spot] for spot in spots], \
+    "the batched read picked the wrong pixels out of the grab"
+assert w.screen_samples([]) == []
+assert w.screen_samples([(110, 52)]) == [GRID[(110, 52)]]
+
+# a grab that cannot run falls back to reading the points one at a time
+w.screen_region = lambda *_args: None
+w.screen_pixel = lambda x, y: GRID.get((int(x), int(y)))
+assert w.screen_samples(spots) == [GRID[spot] for spot in spots], \
+    "the fallback did not answer"
+# and one unreadable point makes the whole reading unreadable, because a probe
+# with a hole in it is not a probe
+assert w.screen_samples(spots + [(999, 999)]) is None
+print("OK  pixels come back from one grab, or one at a time when it fails")
+
 print("\nALL WINAPI TESTS PASSED")
