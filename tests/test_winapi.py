@@ -115,4 +115,26 @@ assert w.screen_samples(spots) == [GRID[spot] for spot in spots], \
 assert w.screen_samples(spots + [(999, 999)]) is None
 print("OK  pixels come back from one grab, or one at a time when it fails")
 
+# ------------------ 8) reading a window that is not the one in front
+# Background delivery farms a game while something else has focus, so the screen
+# at those coordinates belongs to whatever is in front. The window can be asked
+# to paint itself instead — and where it will not, that has to come back None
+# rather than as a rectangle of black that reads like a real answer.
+w.client_rect = lambda hwnd: None
+assert w.window_shot(12345) is None, "a window with no rect handed back pixels"
+assert w.window_samples(12345, [(0, 0)]) is None
+
+# a window that paints: the points are SCREEN coordinates and have to go through
+# its current position, or a stored point stops meaning the button it was on
+w.client_rect = lambda hwnd: (100, 50, 4, 3)
+w.screen_to_client = lambda hwnd, x, y: (x - 100, y - 50)
+PAINTED = [(i, i, i) for i in range(12)]
+w.window_shot = lambda hwnd: (PAINTED, 4, 3)
+assert w.window_samples(1, [(100, 50)]) == [PAINTED[0]], "top-left came out wrong"
+assert w.window_samples(1, [(103, 52)]) == [PAINTED[11]], "bottom-right wrong"
+assert w.window_samples(1, [(101, 51)]) == [PAINTED[5]]
+# a point that has fallen outside the window is not a reading, it is a hole
+assert w.window_samples(1, [(100, 50), (999, 999)]) is None
+print("OK  a window can be read from behind, in its own coordinates")
+
 print("\nALL WINAPI TESTS PASSED")

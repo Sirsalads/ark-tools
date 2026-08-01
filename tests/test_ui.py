@@ -233,6 +233,7 @@ print("OK  trigger fields show and hide with the label")
 # ------------------------------------------------- 5) config round trip
 win.sw_dry.switch.setChecked(True)
 win.sw_verify.switch.setChecked(False)
+win.cb_mode.setCurrentIndex(1)
 win.sp_cps_min.setValue(11.5)
 win.ed_inv_key.setText("TAB")
 win.sp_close_presses.setValue(3)
@@ -250,8 +251,7 @@ win._save()
 reloaded = Config.load(sandbox)
 assert reloaded.drop.dry_run is True
 assert reloaded.drop.verify_filter is False, "the filter check did not persist"
-assert reloaded.target.mode == "foreground", \
-    "background is not a mode any more and must never be written back"
+assert reloaded.target.mode == "background"
 assert reloaded.autoclick.cps_min == 11.5
 assert reloaded.drop.inventory_key == "tab", reloaded.drop.inventory_key
 assert reloaded.drop.close_presses == 3, reloaded.drop.close_presses
@@ -558,14 +558,15 @@ assert win.ed_window.text() == "GeForce NOW", "did not retarget the client"
 assert win.cfg.target.stream_latency_ms == 250, "no latency allowance"
 assert "GeForce NOW" in win.platform_note.text()
 
-# Background delivery is not a choice any more, on any platform. It was greyed
-# out for a streamed session only — which protected the people who had already
-# told the app they were streaming, and nobody else. Someone on GeForce NOW with
-# this dropdown on native kept the option, armed with it, and got three hours of
-# a log where every drop pass refused and the stop sign never ran.
-assert win.cb_mode.count() == 1, "there is a second delivery mode again"
-assert not win.cb_mode.isEnabled()
-assert win.cfg.target.mode == "foreground"
+# background delivery is impossible through the stream: the entry is greyed
+# out, the note says why, and anything that selects it anyway is bounced back
+assert not win.cb_mode.model().item(1).isEnabled(), \
+    "background delivery is still selectable on a streamed session"
+assert "greyed out on GeForce NOW" in win.mode_note.text()
+win.cb_mode.setCurrentIndex(1)
+app.processEvents()
+assert win.cb_mode.currentIndex() == 0, "background delivery stuck on GFN"
+assert win.cfg.target.mode == "foreground", win.cfg.target.mode
 
 # a hand-picked title and latency survive going back to native
 win.ed_window.setText("ArkAscended")
@@ -576,34 +577,6 @@ assert win.cfg.target.platform == "native"
 assert win.ed_window.text() == "ArkAscended", "clobbered a custom title"
 assert win.cfg.target.stream_latency_ms == 180, "clobbered a custom latency"
 print("OK  GeForce NOW profile moves defaults without eating your edits")
-
-# ------------------- 18b) a config already stored on background gets moved
-# This is the reported one. The setting was on background, the platform
-# dropdown was on native so nothing greyed anything out, and the app armed:
-# every drop pass refused for want of a readable screen and the stop sign
-# stood down, on every run, for three hours. The cause was in the log the
-# whole time. Naming it is not enough — it has to be fixed on the way in.
-moved: list[str] = []
-original_log = win._log
-win._log = lambda message, level="info": moved.append(f"{level}:{message}")
-win.cfg.target.mode = "background"
-win._sync_delivery_options()
-assert win.cfg.target.mode == "foreground", "a stored background config survived"
-assert any("moved to foreground" in ln for ln in moved), moved
-# and _pull must not put it back on the next edit
-win._pull()
-assert win.cfg.target.mode == "foreground"
-# the engine refuses it too, for a config hand-edited straight back
-hand_edited = Config()
-hand_edited.target.mode = "background"
-refused = []
-backstop = MacroEngine(hand_edited)
-backstop.log.connect(lambda m, level: refused.append((level, m)))
-backstop.run()
-assert refused and refused[0][0] == "err" and "background" in refused[0][1]
-assert not backstop._running, "it armed in a mode that cannot drive the game"
-win._log = original_log
-print("OK  background delivery is migrated on load and refused by the engine")
 
 # ------------------------------------------------- 19) letterboxed geometry
 win.cb_platform.setCurrentIndex(1)

@@ -260,7 +260,6 @@ class MainWindow(QWidget):
         self._refresh_points_status()
         self._maybe_rescale_points()
         self._maybe_rescale_area()
-        self._sync_delivery_options()
         self._sync_key_watch()
         self._refresh_version()
         self.titlebar.update_pill.clicked.connect(self._open_settings)
@@ -1070,12 +1069,10 @@ class MainWindow(QWidget):
                                  0 if self.cfg.target.platform == "native" else 1,
                                  width=230)
         self.cb_platform.currentIndexChanged.connect(self._on_platform_changed)
-        # Only one entry, and it is not a placeholder for a second one. Posting
-        # messages to the window instead of sending real input was offered here
-        # for a long time; it cannot work with this game and it silently turns
-        # off every check that reads the screen. See _sync_mode_note.
-        self.cb_mode = combo(["Foreground (real input)"], 0, width=230)
-        self.cb_mode.setEnabled(False)
+        self.cb_mode = combo(["Foreground (recommended)", "Background (experimental)"],
+                             0 if self.cfg.target.mode == "foreground" else 1,
+                             width=230)
+        self.cb_mode.currentIndexChanged.connect(self._on_mode_changed)
         mgrid = FormGrid(pairs=1)
         mgrid.add("Where ARK runs", self.cb_platform)
         mgrid.add("Delivery mode", self.cb_mode)
@@ -1164,6 +1161,7 @@ class MainWindow(QWidget):
         lay.addWidget(self._updates_card())
         lay.addStretch(1)
         self._sync_feed_note()
+        self._sync_delivery_options(announce=False)
         self._sync_mode_note()
         self._sync_platform_note()
         return page
@@ -1286,29 +1284,32 @@ class MainWindow(QWidget):
         self._sync_mode_note()
         self._on_change()
 
+    def _on_mode_changed(self) -> None:
+        # the check runs on every change, not only when the platform moves: a
+        # stored config or a stray setCurrentIndex must not land on a delivery
+        # mode that cannot reach the game
+        self._sync_delivery_options()
+        self._sync_mode_note()
+
     def _sync_delivery_options(self, announce: bool = True) -> None:
         """
-        Move a stored background config onto foreground, and say so once.
+        Background delivery is not offered for a streamed session.
 
-        This used to be a greying-out, and it was keyed to the platform
-        dropdown — so it protected only the people who had already told the app
-        they were streaming. Someone on GeForce NOW with that dropdown left on
-        native kept the option, armed with it, and got three hours of a log
-        where every drop pass refused and the stop sign never ran. The setting
-        was the cause and the app said so on every line without ever acting.
+        It cannot work: the client grabs real input and forwards it over the
+        network, so a posted message reaches its window and stops there. Leaving
+        it selectable only buys a session that farms nothing.
 
         `announce` is off while the pages are still being built — the log view
         does not exist yet at that point.
         """
-        if self.cfg.target.mode != "background":
-            return
-        self.cfg.target.mode = "foreground"
-        if announce:
-            self._log(
-                "delivery mode was set to background, which cannot drive this "
-                "game and switches off every check that reads the screen — "
-                "moved to foreground. That is what the refused drop passes and "
-                "the disabled stop sign were", "warn")
+        item = self.cb_mode.model().item(1)
+        if item is not None:
+            item.setEnabled(not self._streaming)
+        if self._streaming and self.cb_mode.currentIndex() == 1:
+            self.cb_mode.setCurrentIndex(0)
+            if announce:
+                self._log("background delivery cannot reach a GeForce NOW "
+                          "session — switched back to foreground", "warn")
 
     def _sync_platform_note(self) -> None:
         if self._streaming:
@@ -1323,19 +1324,31 @@ class MainWindow(QWidget):
                 "The game is installed and running on this machine.")
 
     def _sync_mode_note(self) -> None:
-        self.mode_note.setText(
-            "Sends real input (SendInput). ARK has to be in front — the macro "
-            "pauses by itself when you switch away and resumes when you come "
-            "back.\n\n"
-            "There used to be a background mode here that posted messages to "
-            "the window so you could use the PC while farming. It is gone, "
-            "because it never did that. Unreal reads Raw Input and drops "
-            "posted messages, a streaming client forwards only real input, and "
-            "either way the macro loses its ability to read the screen — so "
-            "every Drop All is held back and the stop sign cannot run. It could "
-            "not farm and it could not be made safe. Farming while you use the "
-            "PC needs a second machine, or ARK in a VM with the macro in the "
-            "guest — see the README.")
+        if self._streaming:
+            self.mode_note.setText(
+                "Background is greyed out on GeForce NOW, and no setting can "
+                "bring it back: the client forwards real input from whatever "
+                "has focus, so a message posted to its window never enters the "
+                "stream. Farming while you use the PC needs a second machine, "
+                "or ARK streamed inside a VM with the macro running in the "
+                "guest — see the README.")
+            return
+        if self.cb_mode.currentIndex() == 0:
+            self.mode_note.setText(
+                "Sends real input (SendInput). Always works, but ARK has to be "
+                "in front — the macro pauses by itself when you switch away and "
+                "resumes when you come back.")
+        else:
+            self.mode_note.setText(
+                "Posts messages straight to the window (PostMessage) so you can "
+                "use the PC — or a second ARK — while this one farms. Unreal "
+                "sometimes reads Raw Input and ignores these, so test it: if "
+                "nothing happens in game, go back to foreground.\n\n"
+                "The safety checks work here too. They read the game's own "
+                "window rather than the screen, so being behind another window "
+                "costs nothing — but ARK has to be BORDERLESS. Exclusive "
+                "fullscreen paints nothing an app can read, and then every Drop "
+                "All is held back and the stop sign cannot arm.")
 
     def _refresh_key_list(self) -> None:
         """Keep the dashboard key list showing the keys actually bound."""
@@ -1463,9 +1476,8 @@ class MainWindow(QWidget):
         drop.unicode_typing = self.chk_unicode.isChecked()
 
         target = self.cfg.target
-        # the combo has one entry now, and _pull must not be the thing that puts
-        # a stored config back onto a mode nothing can select
-        target.mode = "foreground"
+        target.mode = ("foreground" if self.cb_mode.currentIndex() == 0
+                       else "background")
         target.platform = "geforce_now" if self._streaming else "native"
         target.window_title = self.ed_window.text().strip() or "ARK"
         target.require_focus = self.sw_focus.switch.isChecked()
@@ -2246,6 +2258,14 @@ class MainWindow(QWidget):
         self._log(reading, "ok" if readable else "err")
         ok = ok and readable
 
+        # Only background delivery depends on this, and there it decides
+        # whether any guard works at all — so it is checked where the mode is,
+        # not left to be discovered by a session that refuses every drop.
+        if self.cfg.target.mode == "background":
+            from_window, detail = self._window_reads()
+            self._log(detail, "ok" if from_window else "err")
+            ok = ok and from_window
+
         self._log("--- display check done ---", "ok" if ok else "err")
 
     def _probe_reads(self) -> tuple[bool, str]:
@@ -2274,6 +2294,40 @@ class MainWindow(QWidget):
                       + (", and the strip beside it is one flat colour — fine on "
                          "a plain background, worth re-running over the game"
                          if flat else ""))
+
+    def _window_reads(self) -> tuple[bool, str]:
+        """
+        Can the game's own window be read while something else is in front?
+
+        Only background delivery needs this, and it needs it for everything: in
+        that mode the screen belongs to whatever has focus, so the drop check,
+        the panel wait and the stop sign all go through the window instead. It
+        is the one thing that decides whether those guards work there, and it
+        cannot be answered without asking the actual window.
+        """
+        title = self.cfg.target.window_title
+        hwnd = w.find_window(title)
+        if not hwnd:
+            return False, (f'no window matching "{title}" — nothing to read '
+                           "from, and background delivery has nothing to click "
+                           "either")
+        rect = w.client_rect(hwnd)
+        shot = w.window_shot(hwnd)
+        if shot is None:
+            return False, (f'"{title}" will not paint itself for the app '
+                           f"({rect[2]}x{rect[3]} client area) — that is "
+                           "exclusive fullscreen or a driver overlay. Run ARK "
+                           "BORDERLESS: background delivery reads the window, "
+                           "not the screen, so it needs this to work")
+        pixels, width, height = shot
+        shades = len({pixels[i] for i in range(0, len(pixels), max(len(pixels) // 400, 1))})
+        if shades < 3:
+            return False, (f'"{title}" painted {width}x{height} but it came '
+                           "back blank — the window is composited somewhere the "
+                           "app cannot follow. Borderless, or foreground "
+                           "delivery")
+        return True, (f'"{title}" reads fine from behind: {width}x{height}, '
+                      f"{shades} shades — the checks work in background too")
 
     def _round_trip_cursor(self) -> tuple[bool, str]:
         """

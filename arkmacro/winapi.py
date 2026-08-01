@@ -373,6 +373,16 @@ gdi32.GetDIBits.argtypes = (wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
                             wintypes.UINT, ctypes.c_void_p,
                             ctypes.POINTER(BITMAPINFO), wintypes.UINT)
 gdi32.GetDIBits.restype = ctypes.c_int
+user32.PrintWindow.argtypes = (wintypes.HWND, wintypes.HDC, wintypes.UINT)
+user32.PrintWindow.restype = wintypes.BOOL
+
+# PrintWindow asks the window to draw itself into a DC of our choosing, which is
+# the only way to see a window that is not the one in front. CLIENTONLY drops the
+# title bar and border so the result is in client coordinates; RENDERFULLCONTENT
+# is what makes a DirectX or composited surface come along, and without it a game
+# hands back an empty rectangle.
+PW_CLIENTONLY = 0x00000001
+PW_RENDERFULLCONTENT = 0x00000002
 
 
 def list_windows() -> list[tuple[int, str]]:
@@ -572,6 +582,93 @@ def screen_samples(points) -> list[tuple[int, int, int]] | None:
         if colour is None:
             return None
         read.append(colour)
+    return read
+
+
+def window_shot(hwnd: int) -> tuple[list[tuple[int, int, int]], int, int] | None:
+    """
+    The window's own client area as pixels, even when it is behind others.
+
+    (colours, width, height), row-major from the client top-left. None when the
+    window will not draw itself.
+
+    Reading the *screen* is no use to a macro playing a game in the background:
+    those coordinates belong to whatever is actually in front. But a window can
+    be asked to paint itself into a bitmap regardless of who has focus, which is
+    what PrintWindow does, and RENDERFULLCONTENT is what makes it work for a
+    game rather than returning an empty rectangle.
+
+    It is not guaranteed. A window rendering through a swapchain it never
+    presents to the DWM has nothing to hand over, and exclusive fullscreen has
+    nothing at all — those come back None, and the caller treats that the same
+    way it treats an unreadable screen.
+    """
+    rect = client_rect(hwnd)
+    if not rect:
+        return None
+    _x, _y, width, height = rect
+    if width <= 0 or height <= 0 or width * height > SAMPLE_AREA_MAX:
+        return None
+    screen = user32.GetDC(None)
+    if not screen:
+        return None
+    memory = bitmap = None
+    pixels = None
+    try:
+        memory = gdi32.CreateCompatibleDC(screen)
+        if not memory:
+            return None
+        bitmap = gdi32.CreateCompatibleBitmap(screen, width, height)
+        if not bitmap:
+            return None
+        previous = gdi32.SelectObject(memory, bitmap)
+        drawn = user32.PrintWindow(hwnd, memory,
+                                   PW_CLIENTONLY | PW_RENDERFULLCONTENT)
+        if drawn:
+            info = BITMAPINFO()
+            info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            info.bmiHeader.biWidth = width
+            info.bmiHeader.biHeight = -height
+            info.bmiHeader.biPlanes = 1
+            info.bmiHeader.biBitCount = 32
+            info.bmiHeader.biCompression = BI_RGB
+            buffer = (ctypes.c_ubyte * (width * height * 4))()
+            if gdi32.GetDIBits(memory, bitmap, 0, height, buffer,
+                               ctypes.byref(info), DIB_RGB_COLORS) == height:
+                pixels = buffer
+        gdi32.SelectObject(memory, previous)
+    finally:
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if memory:
+            gdi32.DeleteDC(memory)
+        user32.ReleaseDC(None, screen)
+    if pixels is None:
+        return None
+    return ([(pixels[i + 2], pixels[i + 1], pixels[i])
+             for i in range(0, len(pixels), 4)], width, height)
+
+
+def window_samples(hwnd: int, points) -> list[tuple[int, int, int]] | None:
+    """
+    Those SCREEN points read out of the window itself.
+
+    The points were captured while the game was in front, so they are screen
+    coordinates; the window may have moved since, and in the background it is
+    behind something else entirely. Converting each one through the window's
+    current position is what keeps a stored point pointing at the same button —
+    the same conversion the posted clicks already go through.
+    """
+    shot = window_shot(hwnd)
+    if shot is None:
+        return None
+    pixels, width, height = shot
+    read = []
+    for x, y in points:
+        local_x, local_y = screen_to_client(hwnd, int(x), int(y))
+        if not (0 <= local_x < width and 0 <= local_y < height):
+            return None
+        read.append(pixels[local_y * width + local_x])
     return read
 
 

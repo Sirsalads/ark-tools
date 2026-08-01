@@ -179,14 +179,36 @@ class MacroEngine(QThread):
             time.sleep(0.02)
 
     # ------------------------------------------- did the keyword get in there
+    def _read(self, points) -> list[tuple[int, int, int]] | None:
+        """
+        Colours at those screen points, from wherever the game actually is.
+
+        Foreground reads the screen, which is the game, because it is in front.
+        Background cannot: those coordinates belong to whatever IS in front, and
+        for a long time this simply gave up there — which switched off the check
+        that holds back an unverified Drop All, the panel wait and the stop sign,
+        all three, silently. Someone farming an installed ARK in the background
+        while using GeForce NOW in front got a session where every drop pass
+        refused for want of a readable screen, and the setting was doing exactly
+        what it was written to do.
+
+        A window can be asked to paint itself no matter who has focus, so that
+        is what background does now. The points stay screen coordinates — they
+        go through the window's current position, the same way the posted clicks
+        already do.
+        """
+        if self.cfg.target.mode != "background":
+            return w.screen_samples(points)
+        if not self._resolve_window():
+            return None
+        return w.window_samples(self._hwnd, points)
+
     def _probe_filter(self) -> list[tuple[int, int, int]] | None:
         """
         Colours across the search box, or None when it cannot be read.
 
         Read twice — before and after typing — these say whether anything
-        actually landed in the box. Background delivery is excluded for the same
-        reason as the panel probes: the game is behind other windows, so those
-        screen coordinates belong to somebody else.
+        actually landed in the box.
 
         The band is wider than the search box on most HUDs, because its width
         comes from the distance to Drop All and not from the box. That is fine
@@ -197,8 +219,6 @@ class MacroEngine(QThread):
         identically twice.
         """
         d = self.cfg.drop
-        if self.cfg.target.mode == "background":
-            return None
         start, end = d.filter_point, d.dropall_point
         span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         if not any(start) or not any(end) or span < PROBE_MIN_SPAN:
@@ -210,7 +230,7 @@ class MacroEngine(QThread):
             for row in FILTER_PROBE_ROWS
             for step in range(FILTER_PROBE_STEPS)
         ]
-        return w.screen_samples(spots)
+        return self._read(spots)
 
     @staticmethod
     def _moved(before, after) -> int:
@@ -235,13 +255,19 @@ class MacroEngine(QThread):
         that was not the problem, so this only says what it knows.
         """
         d = self.cfg.drop
-        if self.cfg.target.mode == "background":
-            return ("Delivery mode is background, which never reads the screen "
-                    "— the game is behind other windows there. Switch to "
-                    "foreground to get the check back")
         start, end = d.filter_point, d.dropall_point
         if not any(start) or not any(end):
             return "the filter and Drop All points are not both captured"
+        if self.cfg.target.mode == "background":
+            if not self._resolve_window():
+                return (f'no window called "{self.cfg.target.window_title}" — '
+                        "background delivery reads the game's own window, so it "
+                        "has to find it first")
+            return ("the game's window will not paint itself for the app. That "
+                    "is exclusive fullscreen, or a driver overlay — run ARK "
+                    "BORDERLESS and it can be read from behind. Foreground "
+                    "delivery would also work, at the cost of the window "
+                    "having to be in front")
         span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         if span < PROBE_MIN_SPAN:
             return (f"the two captured points are only {span}px apart, too close "
@@ -290,19 +316,13 @@ class MacroEngine(QThread):
     def _probe_panel(self) -> list[tuple[int, int, int]] | None:
         """
         Colours across the inventory panel, or None when it cannot be read.
-
-        Background delivery is excluded on purpose: the whole point of that mode
-        is that the game is behind other windows, so what is on screen at those
-        coordinates is somebody else's window.
         """
         d = self.cfg.drop
-        if self.cfg.target.mode == "background":
-            return None
         start, end = d.filter_point, d.dropall_point
         span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         if not any(end) or span < PROBE_MIN_SPAN:
             return None
-        return w.screen_samples([
+        return self._read([
             (round(start[0] + (end[0] - start[0]) * fraction),
              round(start[1] + (end[1] - start[1]) * fraction))
             for fraction in PANEL_PROBES
@@ -467,9 +487,6 @@ class MacroEngine(QThread):
     def _stop_sign_problem(self) -> str:
         """Why the stop sign cannot run, or "" when it can."""
         s = self.cfg.stop_sign
-        if self.cfg.target.mode == "background":
-            return ("background delivery never reads the screen, so there is "
-                    "nothing to watch")
         if not sweep.usable(s.area):
             return "no icon has been captured yet — pick one on the Farm page"
         if len(s.sample) != len(stopsign.grid(s.area)):
@@ -486,7 +503,7 @@ class MacroEngine(QThread):
         stop the macro for a reason that has nothing to do with the game.
         """
         s = self.cfg.stop_sign
-        fresh = w.screen_samples(stopsign.grid(s.area))
+        fresh = self._read(stopsign.grid(s.area))
         if fresh is None:
             return False
         if not stopsign.seen(s.sample, fresh, s.tolerance, s.match_percent):
@@ -673,21 +690,15 @@ class MacroEngine(QThread):
         self._drop_requested = False
         cfg = self.cfg
 
-        # Posted messages do not drive this game. Unreal reads Raw Input and
-        # drops them; a streaming client forwards only real input, so they stop
-        # at its window. And a macro delivering that way cannot read the screen
-        # either, which switches off the check that holds back an unverified
-        # Drop All and the icon watcher with it.
-        #
-        # The UI no longer offers the mode and moves a stored config off it.
-        # This is the backstop for a hand-edited file, and it refuses rather
-        # than runs: arming into it bought one reported session three hours of
-        # a log that named the cause on every line while nothing worked.
-        if cfg.target.mode == "background":
-            self.log.emit("delivery mode is background, which cannot drive ARK "
-                          "and switches off every screen check — refusing to "
-                          "arm. Set target.mode to \"foreground\" in "
-                          "config.json, or just open Settings once", "err")
+        # Posted messages cannot reach a streamed session: the GeForce NOW
+        # client grabs real input and forwards it over the network, and a
+        # WM_KEYDOWN handed to its window is not real input. Nothing would
+        # arrive in game and every wait would still be paid, so say so and stop
+        # instead of farming into the void.
+        if cfg.target.mode == "background" and cfg.target.platform == "geforce_now":
+            self.log.emit("background delivery cannot reach a GeForce NOW "
+                          "session — the client only forwards real input. "
+                          "Switch Delivery mode to foreground", "err")
             self.state_changed.emit("idle")
             self._running = False
             return

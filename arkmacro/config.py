@@ -356,16 +356,6 @@ def _sanitize(cfg: "Config") -> None:
     # guards against costs the whole inventory
     drop.verify_filter = bool(drop.verify_filter)
 
-    # Background delivery is not a mode any more. It posted messages instead of
-    # sending real input, which Unreal drops and a streaming client never
-    # forwards, and it switched off every check that reads the screen — so a
-    # config left on it farmed nothing and refused every drop. A stored one is
-    # moved rather than honoured; the app says so, and the engine refuses to arm
-    # if a hand-edited file puts it back.
-    cfg.target.mode = ("background"
-                       if str(cfg.target.mode).strip().lower() == "background"
-                       else "foreground")
-
     feed = cfg.auto_feed
     # a 5 s feed timer would spend the session eating; a hand-edited one is
     # clamped rather than trusted

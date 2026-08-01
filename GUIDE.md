@@ -194,10 +194,16 @@ wrong.
 It sees *that* there is text, not *which* text — so it is a floor, not a
 guarantee. The two rules above still apply.
 
-**It needs to be able to read your screen.** In exclusive fullscreen Windows
-returns no pixels, the check cannot run, and rather than drop unverified the
-macro **holds the drop back and says so in red**. If every pass is refusing,
-that is what happened: switch ARK to borderless.
+**It needs to be able to read the game.** In exclusive fullscreen Windows returns
+no pixels, the check cannot run, and rather than drop unverified the macro
+**holds the drop back and says so in red**. If every pass is refusing, that is
+what happened: switch ARK to borderless.
+
+On **background delivery** it reads the game's own window instead of the screen —
+the screen there belongs to whatever you have in front, which may well be another
+game. So the check works in background too, and it works while you use the PC.
+Same requirement: ARK **borderless**, because a window in exclusive fullscreen
+has nothing to hand over. The display check says which it is.
 
 **A one- or two-letter keyword is flagged, not blocked.** `o` lists Stone, Wood,
 Cooked Meat, Hide Boots and most of your bag, and Drop All takes all of it. That
@@ -378,10 +384,10 @@ window, and measures the video inside the window instead of the window itself.
 **Recapture your points after switching**, and raise the per-slot times on the
 Drop and Overcap macros: each stop costs a round trip up there.
 
-ARK still has to be the window in front — the client forwards only *real* input,
-so there is no way to farm a stream in the background from the same machine.
-Doing that needs a second machine, or ARK streamed inside a VM with the app
-running in the guest.
+Background delivery is greyed out on this profile and no setting brings it back —
+the client only forwards *real* input, so a message posted to its window never
+enters the stream. Farming while you use the PC needs a second machine, or ARK
+streamed inside a VM.
 
 ---
 

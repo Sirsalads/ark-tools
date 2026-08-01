@@ -526,6 +526,72 @@ assert not any(c == ("click_at", 1400, 900) for c in slow)
 assert slow_engine.drops == 0
 print("OK  a realistic HUD drops when it should and never when it should not")
 
+# -------- 1d4) background delivery reads the game's window, not the screen
+# The reported setup: an installed ARK farming in the background while GeForce
+# NOW has the mouse and keyboard in front. The screen there belongs to the
+# session being played, not the one being farmed — so every probe used to give
+# up, which switched off the drop check, the panel wait and the stop sign at
+# once. Three hours of "the screen cannot be read", from a setting doing exactly
+# what it was written to do.
+#
+# A window paints itself on request no matter who has focus, so background reads
+# that instead. The points stay screen coordinates and go through the window's
+# current position, the same conversion the posted clicks already use.
+cfg.target.mode = "background"
+cfg.drop.verify_filter = True
+cfg.drop.templates = [{"name": "Thatch", "keyword": "thatch", "enabled": True}]
+
+window_reads: list[tuple] = []
+screen_reads: list[tuple] = []
+hud = RealisticHud()
+
+original = (FakeW.tap, FakeW.screen_samples, FakeW.type_text, FakeW.post_text,
+            FakeW.post_click, FakeW.post_key, FakeW.find_window,
+            FakeW.is_window)
+try:
+    FakeW.find_window = staticmethod(lambda _f: 4242)
+    FakeW.is_window = staticmethod(lambda h: h == 4242)
+    # the screen is somebody else's game, and answering from it would be wrong
+    FakeW.screen_samples = staticmethod(
+        lambda points: screen_reads.append(tuple(points)) or [(9, 9, 9)] * len(points))
+
+    def fake_window_samples(hwnd, points):
+        window_reads.append(hwnd)
+        return [hud.pixel(x, y) for x, y in points]
+
+    FakeW.window_samples = staticmethod(fake_window_samples)
+    FakeW.post_key = staticmethod(
+        lambda hwnd, vk, hold=0.0: hud.tap(vk))
+    FakeW.post_text = staticmethod(
+        lambda hwnd, text, delay=0.0: hud.type_text(text))
+    FakeW.post_click = staticmethod(
+        lambda hwnd, x, y, button="left", hold=0.0: hud.click_at(x, y))
+
+    calls.clear()
+    bg = eng.MacroEngine(cfg)
+    bg.log.connect(lambda _m, _l: None)
+    bg._running = True
+    bg._run_drop()
+finally:
+    (FakeW.tap, FakeW.screen_samples, FakeW.type_text, FakeW.post_text,
+     FakeW.post_click, FakeW.post_key, FakeW.find_window,
+     FakeW.is_window) = original
+    del FakeW.window_samples
+
+assert window_reads, "background never read the game's window"
+assert all(h == 4242 for h in window_reads)
+assert not screen_reads, "background read the screen, which is a different game"
+assert bg.drops == 1, "the drop pass did not complete in background"
+assert ("type", "thatch") in calls and ("click_at", 1400, 900) in calls
+
+cfg.target.mode = "foreground"
+cfg.drop.templates = [
+    {"name": "Thatch", "keyword": "thatch", "enabled": True},
+    {"name": "Disabled", "keyword": "wood", "enabled": False},
+    {"name": "Stone", "keyword": "stone", "enabled": True},
+]
+print("OK  background delivery checks the game's own window and drops for real")
+
 # ------------------- 1e) an unreadable screen holds the drop back
 # Reported from a real session: every pass logged "the search box cannot be
 # read" and dropped anyway, on a machine running ARK in exclusive fullscreen
@@ -1073,34 +1139,25 @@ added = with_stream - baseline
 assert 0.85 <= added <= 1.30, f"latency allowance added {added:.2f}s"
 print(f"OK  stream latency stretches every wait (+{added:.2f}s at 120ms)")
 
-# ------------------------- 13b) background delivery refuses to arm, always
-# It posts messages instead of sending real input. Unreal reads Raw Input and
-# drops them; a streaming client forwards only real input, so they stop at its
-# window. And a macro delivering that way cannot read the screen either, which
-# switches off the check that holds back an unverified Drop All and the icon
-# watcher with it.
-#
-# This used to refuse only when the platform was set to GeForce NOW, which
-# protected the people who had already told the app they were streaming and
-# nobody else. Someone streaming with that setting left on native armed into it
-# and got three hours of refused drop passes. Neither half of that pair is a
-# condition worth having: the mode does not work anywhere.
-for platform in ("geforce_now", "native"):
-    background = Config()
-    background.target.mode = "background"
-    background.target.platform = platform
-    background.target.start_delay_s = 0
-    background.drop.enabled = False
-    levels: list[str] = []
-    refuser = eng.MacroEngine(background)
-    refuser.log.connect(lambda _m, level: levels.append(level))
-    calls.clear()
-    refuser.start()
-    refuser.wait(3000)
-    app.processEvents()
-    assert not calls, f"on {platform} it sent input it cannot deliver: {calls}"
-    assert "err" in levels, f"on {platform} it armed quietly: {levels}"
-print("OK  background delivery refuses to arm on any platform, loudly")
+# ------------------------- 13b) background delivery cannot reach a stream
+# The GeForce NOW client forwards real input from whatever has focus; a message
+# posted to its window stops at the window. Arming anyway would pay every wait
+# and send nothing into the game.
+streamed_bg = Config()
+streamed_bg.target.mode = "background"
+streamed_bg.target.platform = "geforce_now"
+streamed_bg.target.start_delay_s = 0
+streamed_bg.drop.enabled = False
+levels: list[str] = []
+refuser = eng.MacroEngine(streamed_bg)
+refuser.log.connect(lambda _m, level: levels.append(level))
+calls.clear()
+refuser.start()
+refuser.wait(3000)
+app.processEvents()
+assert not calls, f"it sent input into a stream it cannot reach: {calls}"
+assert "err" in levels, levels
+print("OK  background delivery on GeForce NOW refuses to arm, loudly")
 
 # ------------------------------------------- 14) letterboxed video area
 assert ark_layout.video_area(0, 0, 1920, 1080) == (0, 0, 1920, 1080)
