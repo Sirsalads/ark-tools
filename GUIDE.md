@@ -205,6 +205,11 @@ every check works, because the pixels on screen where the macro looks really are
 the game. Only something drawn *on top* of it breaks that, and then the log names
 the window that is in the way rather than guessing.
 
+The app takes itself out of that picture: hitting Start on a background run
+minimises this window if it was sitting over the two captured points, with a line
+saying so. It does not need to be on screen — the hotkeys are global and the log
+is all still there when you bring it back.
+
 **A one- or two-letter keyword is flagged, not blocked.** `o` lists Stone, Wood,
 Cooked Meat, Hide Boots and most of your bag, and Drop All takes all of it. That
 is a typo about as often as it is the whole point: `o` while farming metal drops

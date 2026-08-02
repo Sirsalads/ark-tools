@@ -684,6 +684,13 @@ swapchain — ARK is one of those, so treat it as a bonus and not the plan. If i
 fails there, the drop is refused rather than taken on somebody else's pixels,
 and the log names the window that is in the way.
 
+The app keeps itself out of the way: starting a background run minimises this
+window when it is over the two captured points, and the display check measures
+with itself hidden. That second one is not a nicety — the button that starts the
+check lives in the window, so the window is necessarily in front, and the first
+version of the check duly reported that *A.N.S Tools* was covering the game and
+told someone to go and move ARK.
+
 The short version for a two-monitor setup: **keep the ARK you are farming in
 view on one screen**, play on the other, and every check works.
 

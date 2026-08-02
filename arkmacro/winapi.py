@@ -603,13 +603,19 @@ def screen_samples(points) -> list[tuple[int, int, int]] | None:
     return read
 
 
+def root_of(hwnd: int) -> int:
+    """The top-level window a handle belongs to, or 0."""
+    if not hwnd:
+        return 0
+    return int(user32.GetAncestor(int(hwnd), GA_ROOT) or hwnd)
+
+
 def window_at(x: int, y: int) -> int:
     """The top-level window actually drawn at that screen point, or 0."""
     top = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
     if not top:
         return 0
-    root = user32.GetAncestor(top, GA_ROOT)
-    return int(root or top)
+    return root_of(top)
 
 
 def visible_at(hwnd: int, points) -> bool:

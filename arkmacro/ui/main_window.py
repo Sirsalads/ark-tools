@@ -1567,6 +1567,8 @@ class MainWindow(QWidget):
             self._go(PAGE_FARM)
             return
 
+        self._step_aside()
+
         self.engine = MacroEngine(self.cfg)
         self.engine.log.connect(self._log)
         self.engine.state_changed.connect(self._on_state)
@@ -1577,6 +1579,39 @@ class MainWindow(QWidget):
         self._time_timer.start(1000)
         self.engine.start()
         self._set_start_button(running=True)
+
+    def _step_aside(self) -> None:
+        """
+        Get this window off the game before a background run starts.
+
+        In background delivery the macro reads the game where it sits on screen,
+        so anything drawn over the two captured points blinds every check. This
+        window is the likeliest culprit and the only one the app can do anything
+        about: it is the one you were just clicking Start in, and on a single
+        monitor it is almost certainly on top of the game.
+
+        Minimising is the right answer rather than a warning, because a
+        minimised app is what you wanted anyway once the farm is running — the
+        hotkeys are global, and the log is all still there when you bring it
+        back. Foreground delivery is left alone: there the game comes to the
+        front by itself and this window goes behind with everything else.
+        """
+        if self.cfg.target.mode != "background":
+            return
+        points = [tuple(p) for p in (self.cfg.drop.filter_point,
+                                     self.cfg.drop.dropall_point) if any(p)]
+        if not points:
+            return
+        # through the same normalisation the probe uses, or a toolkit that wraps
+        # the top level in a helper compares two different handles for one window
+        mine = w.root_of(int(self.winId()))
+        if not mine or not any(w.window_at(*point) == mine for point in points):
+            return
+        self._log("this window was sitting over the points the macro reads — "
+                  "minimised so the checks can see the game. Bring it back "
+                  "whenever, it does not have to be on screen", "warn")
+        self.showMinimized()
+        QApplication.processEvents()
 
     def _stop_macro(self) -> None:
         if self.engine:
@@ -2262,8 +2297,14 @@ class MainWindow(QWidget):
         # Only background delivery depends on this, and there it decides
         # whether any guard works at all — so it is checked where the mode is,
         # not left to be discovered by a session that refuses every drop.
+        #
+        # Measured with this window out of the way, because the button that
+        # starts the check is IN this window: it is necessarily in front, and
+        # the first version duly reported that "A.N.S Tools" was covering the
+        # game. A check that reports itself is not measuring the thing it was
+        # asked about.
         if self.cfg.target.mode == "background":
-            from_window, detail = self._window_reads()
+            from_window, detail = self._out_of_the_way(self._window_reads)
             self._log(detail, "ok" if from_window else "err")
             ok = ok and from_window
 
@@ -2295,6 +2336,29 @@ class MainWindow(QWidget):
                       + (", and the strip beside it is one flat colour — fine on "
                          "a plain background, worth re-running over the game"
                          if flat else ""))
+
+    def _out_of_the_way(self, measure):
+        """
+        Run `measure` with this window hidden, then put it back.
+
+        Anything that asks "what is on screen where the macro looks" has to be
+        asked with the asker off the screen. The alternative is what happened:
+        the check answered that the app's own window was covering the game,
+        which was true, and only true because the check was running.
+        """
+        self.hide()
+        QApplication.processEvents()
+        # a hidden window is not gone until the compositor says so
+        deadline = time.perf_counter() + 0.30
+        while time.perf_counter() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        try:
+            return measure()
+        finally:
+            self.show()
+            self.raise_()
+            self.activateWindow()
 
     def _window_reads(self) -> tuple[bool, str]:
         """

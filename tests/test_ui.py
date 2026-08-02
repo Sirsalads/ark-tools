@@ -1126,6 +1126,51 @@ win._log = original_log
 print("OK  the stop sign is captured off the frozen screen, and flat boxes are "
       "refused")
 
+# ------------------- 26) the check must not measure itself, and get out of it
+# The button that starts the display check is IN this window, so the window is
+# necessarily in front of everything — and the first version duly reported that
+# "A.N.S Tools" was covering the game and told someone to move ARK. It has to
+# measure with itself off the screen.
+hidden_while_measuring = []
+original_log = win._log
+win._log = lambda message, level="info": None
+win.show()
+app.processEvents()
+result = win._out_of_the_way(
+    lambda: (hidden_while_measuring.append(win.isVisible()), (True, "measured"))[1])
+assert result == (True, "measured")
+assert hidden_while_measuring == [False], \
+    "the check ran with its own window still on screen"
+assert win.isVisible(), "it hid itself and never came back"
+
+# and on arming a background run it steps aside, because in that mode the macro
+# reads the game where it sits and this window is the likeliest thing over it
+win.cfg.target.mode = "background"
+win.cfg.drop.filter_point = [500, 400]
+win.cfg.drop.dropall_point = [700, 400]
+moved = []
+win._log = lambda message, level="info": moved.append(message)
+w_module.root_of = lambda hwnd: 111
+w_module.window_at = lambda x, y: 111          # that point is this window
+win._step_aside()
+assert any("minimised so the checks can see the game" in m for m in moved), moved
+
+# nothing over the points, nothing to do
+moved.clear()
+w_module.window_at = lambda x, y: 999
+win._step_aside()
+assert not moved, moved
+
+# and foreground is left alone: there the game comes to the front by itself
+win.cfg.target.mode = "foreground"
+w_module.window_at = lambda x, y: 111
+win._step_aside()
+assert not moved, moved
+win._log = original_log
+win.showNormal()
+print("OK  the display check measures with itself hidden, and a background run "
+      "moves it out of the way")
+
 win.hotkeys.stop()
 win.close()
 print("\nALL UI TESTS PASSED")
