@@ -67,6 +67,9 @@ FILTER_PROBE_ROWS = (-4, 0, 4)    # and on three rows, to catch the glyph bodies
 # simply never change and never vote.
 FILTER_CHANGED_MIN = 3
 FILTER_CHANGED_MAX = 0.70         # of the samples; above this the scene changed
+# How many times to wipe a box that will not come up empty before giving up on
+# that template. Two is enough for a queue catching up; more is a stuck game.
+EMPTY_ATTEMPTS = 2
 # A wipe of the search box. The game clears the filter itself when Drop All
 # fires, so this is only for the boxes it has not cleared: the first template of
 # a pass (a human may have left something in there), a dry run, and the template
@@ -296,6 +299,47 @@ class MacroEngine(QThread):
         return (f"the points read fine on their own but the strip between "
                 f"({start[0]}, {start[1]}) and ({end[0]}, {end[1]}) did not — "
                 "report this line")
+
+    def _settle_empty(self, empty_print, box):
+        """
+        Make sure the box really is empty before a keyword goes into it.
+
+        (emptied, latest reading). This closes the last way a lagging game could
+        get an unfiltered Drop All past the check, and it is worth spelling out
+        because the hole was invisible from the numbers.
+
+        ARK clears its own filter when Drop All fires, and that was trusted. It
+        is true, and it is not immediate: in background delivery the click is a
+        posted message the game handles when it gets round to it. Under lag the
+        box on screen still holds the LAST keyword while the next one is being
+        typed — so the reading before typing has a word in it and the reading
+        after has none, because the queued Drop All landed in between.
+
+        Twelve samples move either way. A word arriving and a word leaving are
+        the same number, and the check said yes to the one that means the filter
+        is empty. No count can separate them, in either direction, because the
+        difference is not in how much moved but in where it started.
+
+        So the starting point stops being assumed. `empty_print` is what this
+        box looks like with nothing in it, read right after a wipe that
+        certainly emptied it, and the box has to match that before anything is
+        typed. If it does not, it gets wiped and looked at again.
+        """
+        if empty_print is None or box is None:
+            return True, box
+        for _ in range(EMPTY_ATTEMPTS):
+            if self._moved(empty_print, box) < FILTER_CHANGED_MIN:
+                return True, box
+            self.log.emit("the search box still holds the last keyword — the "
+                          "game has not caught up with its own Drop All. "
+                          "Wiping before typing the next one", "warn")
+            self._clear_field()
+            if not self._wait(300):
+                return False, box
+            box = self._probe_filter()
+            if box is None:
+                return True, box        # unreadable is refused further down
+        return False, box
 
     def _box_reading(self, before, after) -> tuple[bool | None, str]:
         """
@@ -581,6 +625,10 @@ class MacroEngine(QThread):
         stale_box = True
         unreadable_logged = False
         dropped = 0
+        # what this search box looks like holding nothing, read right after a
+        # wipe that certainly emptied it. Every later template is measured
+        # against it rather than against whatever happens to be there.
+        empty_print = None
 
         for template in templates:
             if not self._running:
@@ -591,12 +639,33 @@ class MacroEngine(QThread):
             self._click_point(d.filter_point, "filter field")
             if not self._wait(200):
                 return
-            if stale_box or d.dry_run:
+            wiped = stale_box or d.dry_run
+            if wiped:
                 self._clear_field()
                 stale_box = False
+                # The backspaces are posted too, so a lagging game has not
+                # necessarily applied them yet — and this reading becomes the
+                # reference every later template is judged against. A poisoned
+                # reference is worse than a slow pass.
+                if not self._wait(250):
+                    return
 
             # 3) read the box while it is still empty, then type the keyword
             empty_box = self._probe_filter()
+            if wiped and empty_box is not None:
+                empty_print = empty_box
+
+            # 3b) and "still empty" is checked, not assumed — see _settle_empty
+            emptied, empty_box = self._settle_empty(empty_print, empty_box)
+            if not emptied and d.verify_filter and not d.dry_run:
+                stale_box = True
+                self.log.emit(
+                    f'the search box will not come up empty, so "{keyword}" '
+                    "would be typed onto the end of the last one — Drop All "
+                    "skipped. Raise Farm - After Drop All if this keeps "
+                    "happening, the game is behind on its own clicks", "err")
+                continue
+
             self._type(keyword)
             self.log.emit(f'filtering "{keyword}"', "info")
             if not self._wait(d.after_type_wait_ms):

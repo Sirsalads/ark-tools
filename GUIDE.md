@@ -184,6 +184,19 @@ changes while the search box is still empty — so a check with no ceiling would
 wave that through and Drop All would take the whole bag. Too many changed is not
 a word, it is the screen repainting, and it is refused.
 
+And the box has to be **empty before the keyword goes in**, which is checked
+rather than assumed. ARK clears its own filter when Drop All fires, but not
+instantly — under lag the box still shows the *last* keyword while the next one
+is typed, and then the old word vanishing counts as exactly as much change as a
+new word arriving. Counting cannot tell those apart, so the app remembers what
+the box looks like empty and makes sure it matches before typing. If it does
+not, it wipes and looks again:
+
+```
+the search box still holds the last keyword — the game has not caught up with
+its own Drop All. Wiping before typing the next one
+```
+
 The app also waits for the inventory panel to appear rather than trusting a fixed
 delay, and that helps — but it is a **second opinion, never a veto**. If it cannot
 confirm the panel it says so and carries on, because a keyword typed at a panel

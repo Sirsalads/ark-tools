@@ -333,6 +333,26 @@ that is not there moves nothing in the band, so the count already refuses the
 case the panel check exists for. Anything allowed to block every drop has to be
 something that cannot be wrong, and only that one qualifies.
 
+### And the box has to start empty
+
+A count says how much moved. It cannot say which way, and that is not a detail:
+a word **arriving** and a word **leaving** move the same twelve samples.
+
+ARK clears its own filter when Drop All fires, and that was trusted. It is true
+and it is not immediate — the click is a posted message the game handles when it
+gets round to it. Under lag the box still holds the last keyword while the next
+one is typed, and the queued Drop All lands between the two readings. Word in
+the first, none in the second, twelve samples moved, check passes, filter empty,
+bag gone. It survived every version of the measure above because no measure of
+*how much* can separate those two.
+
+So the starting point stops being assumed. The app remembers what this box looks
+like holding nothing — read right after a wipe that certainly emptied it — and
+the box has to match that before a keyword goes in. If it does not, it gets
+wiped and looked at again, and if it still will not come up empty the template
+is skipped. The reference itself is taken after a settling wait, because the
+backspaces are posted messages too.
+
 Every refusal logs the numbers it decided on — `12 of 45 samples changed, a
 keyword is 3-31` — and so does every pass that goes through. A log from a session
 that worked is the only thing that makes a log from a session that did not mean

@@ -618,6 +618,81 @@ cfg.drop.templates = [
 print("OK  background reads the game where it is visible, and refuses when "
       "something covers it")
 
+# -- 1d5) a game behind on its own Drop All, which is the last way it dropped all
+# Reported after the check was already working: "the Drop All works but the lag
+# still makes it drop everything."
+#
+# ARK clears its own filter when Drop All fires, and that was trusted. It is
+# true and it is not immediate — the click is a posted message the game handles
+# when it gets round to it. Under lag the box still holds the LAST keyword while
+# the next one is typed, and the queued Drop All lands between the two readings.
+# So the reading before typing has a word in it and the one after has none.
+#
+# Twelve samples move. A word arriving and a word leaving are the same number,
+# and the check said yes to the one that means the filter is empty.
+
+
+class LaggingHud(RealisticHud):
+    """
+    A HUD whose Drop All takes `behind` more reads to be processed.
+
+    Nothing here is exotic: it is the message queue doing what a message queue
+    does when the game is busy.
+    """
+
+    def __init__(self, behind: int = 40, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.behind = behind
+        self.pending_clear = 0
+        self.dropped_with: list[str] = []
+
+    def pixel(self, x, y):
+        if self.pending_clear:
+            self.pending_clear -= 1
+            if not self.pending_clear:
+                self.text = ""          # the game finally caught up
+        return super().pixel(x, y)
+
+    def click_at(self, x, y, button="left", hold=0.0, settle=0.0):
+        calls.append(("click_at", x, y))
+        if (x, y) == (1400, 900):
+            # the ground truth this whole test exists for: what the filter
+            # actually held at the instant Drop All was clicked
+            self.dropped_with.append(self.text)
+            self.pending_clear = self.behind    # queued, not done
+
+
+# the measure on its own, on the two readings that failure produces
+lagged = eng.MacroEngine(cfg)
+leaving = ([BOX] * 33 + [GLYPH] * 12, [BOX] * 45)     # a word going away
+arriving = ([BOX] * 45, [BOX] * 33 + [GLYPH] * 12)    # a word turning up
+assert lagged._box_reading(*leaving)[0] is lagged._box_reading(*arriving)[0], \
+    "these are meant to be indistinguishable — that is the whole point"
+# where it started is what separates them, and that is checked and not assumed
+assert lagged._settle_empty([BOX] * 45, [BOX] * 45)[0], "an empty box read as full"
+assert lagged._settle_empty(None, [BOX] * 45)[0], "no reference is not a refusal"
+
+cfg.drop.verify_filter = True
+cfg.drop.templates = [
+    {"name": "Thatch", "keyword": "thatch", "enabled": True},
+    {"name": "Stone", "keyword": "stone", "enabled": True},
+]
+for behind in (0, 25, 60, 200):
+    hud = LaggingHud(behind=behind)
+    hud.dropped_with = []
+    drop_against(hud)
+    assert "" not in hud.dropped_with, (
+        f"with the game {behind} reads behind, Drop All fired on an EMPTY "
+        f"filter: {hud.dropped_with}")
+print("OK  a game behind on its own Drop All never gets an empty filter past "
+      "the check")
+
+cfg.drop.templates = [
+    {"name": "Thatch", "keyword": "thatch", "enabled": True},
+    {"name": "Disabled", "keyword": "wood", "enabled": False},
+    {"name": "Stone", "keyword": "stone", "enabled": True},
+]
+
 # ------------------- 1e) an unreadable screen holds the drop back
 # Reported from a real session: every pass logged "the search box cannot be
 # read" and dropped anyway, on a machine running ARK in exclusive fullscreen
