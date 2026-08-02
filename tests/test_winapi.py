@@ -155,4 +155,29 @@ assert w.visible_at(OTHER, [(900, 40)])
 assert not w.visible_at(0, [(10, 10)])
 print("OK  visible is asked of Windows, not inferred from focus")
 
+# ---------- 10) two windows that score the same is not a quiet situation
+# The reported machine had both of these open at once. Same rank (both start
+# with the fragment), same client area, so nothing is left to choose with and
+# the winner falls out of which one is in front — it can swap between runs
+# without anything being touched, and the macro aims at a different game.
+NATIVE, STREAM = 201, 202
+TITLES[NATIVE] = "Ark: Survival Ascended (92.26.0)"
+TITLES[STREAM] = "ARK: Survival Ascended on GeForce NOW"
+RECTS[NATIVE] = RECTS[STREAM] = (0, 0, 1920, 1080)
+install([NATIVE, STREAM])
+assert len(w.tied_windows("Ark: Survival Ascended")) == 2, \
+    "a genuine tie between two ARK windows went unnoticed"
+
+# a fragment only one of them contains settles it, and survives a game patch
+# because the version sits inside the brackets
+assert w.tied_windows("Ascended (") == [TITLES[NATIVE]]
+assert w.find_window("Ascended (") == NATIVE
+assert w.tied_windows("GeForce NOW") == [TITLES[STREAM]]
+
+# and a clear winner is not a tie, however many also matched
+install([NATIVE, STREAM, EXPLORER])
+assert len(w.tied_windows("ArkAscended")) <= 1
+assert w.tied_windows("nothing-like-this") == []
+print("OK  a tie between two windows is reported as one, not picked quietly")
+
 print("\nALL WINAPI TESTS PASSED")

@@ -428,6 +428,39 @@ def window_pid(hwnd: int) -> int:
     return pid.value
 
 
+def _scored(fragment: str) -> list[tuple[tuple[int, int], int, str]]:
+    """((rank, client area), hwnd, title) for every window that matches."""
+    needle = (fragment or "").lower().strip()
+    if not needle:
+        return []
+    own = os.getpid()
+    found = []
+    for hwnd, title in list_windows():
+        lowered = title.lower()
+        if needle not in lowered or window_pid(hwnd) == own:
+            continue
+        rank = 3 if lowered == needle else 2 if lowered.startswith(needle) else 1
+        rect = client_rect(hwnd)
+        found.append(((rank, rect[2] * rect[3] if rect else 0), hwnd, title))
+    return found
+
+
+def tied_windows(fragment: str) -> list[str]:
+    """
+    Titles of the windows that score highest, when more than one does.
+
+    A tie at the top means the score has run out of ways to choose and the
+    winner falls out of enumeration order, i.e. out of which window is in
+    front. That is worth saying out loud rather than picking quietly: two ARK
+    windows — one installed, one streamed — tie exactly.
+    """
+    scored = _scored(fragment)
+    if not scored:
+        return []
+    top = max(score for score, _hwnd, _title in scored)
+    return [title for score, _hwnd, title in scored if score == top]
+
+
 def find_window(fragment: str) -> int | None:
     """
     Best window whose title contains `fragment`, case-insensitive.

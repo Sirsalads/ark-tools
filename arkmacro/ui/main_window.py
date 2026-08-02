@@ -2087,12 +2087,25 @@ class MainWindow(QWidget):
         rect = w.client_rect(chosen)
         size = f"{rect[2]}x{rect[3]}" if rect else "unknown size"
         self._log(f'targeting "{titles.get(chosen, "?")}" ({size})', "ok")
-        if len(matches) > 1:
-            others = ", ".join(f'"{t}"' for t in matches
-                               if t != titles.get(chosen))
-            self._log(f"{len(matches)} windows match that text — also {others}. "
-                      "Make the title more specific if the wrong one wins.",
-                      "warn")
+        if len(matches) <= 1:
+            return
+        others = ", ".join(f'"{t}"' for t in matches if t != titles.get(chosen))
+        # Candidates are ranked, so several matches is usually fine — one of
+        # them wins on merit. A tie at the top is a different thing: nothing is
+        # left to separate them and the winner comes down to which window
+        # happens to be in front, so it can change between runs without anything
+        # being touched. Two ARK windows tie exactly, which is the setup where
+        # this matters most and the one where it reads as a harmless notice.
+        if len(w.tied_windows(fragment)) > 1:
+            self._log(
+                f"{len(matches)} windows match, and the top ones score the "
+                f"SAME — also {others}. Which one wins is then down to which is "
+                "in front, so it can change between runs. Make the title "
+                "unambiguous: something only the window you want contains",
+                "err")
+            return
+        self._log(f"{len(matches)} windows match that text — also {others}. "
+                  "Make the title more specific if the wrong one wins.", "warn")
 
     # --------------------------------------------------------- game geometry
     def _game_area(self) -> tuple[int, int, int, int]:
