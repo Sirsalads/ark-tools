@@ -201,6 +201,19 @@ class MacroEngine(QThread):
             return w.screen_samples(points)
         if not self._resolve_window():
             return None
+        # Visible beats focused, and this is the case that actually matters: on
+        # two monitors the game sits uncovered on one while you play on the
+        # other. Nothing is in the way, so the desktop pixels there are the
+        # game, and reading them is both correct and cheap. Windows is asked
+        # what is drawn at the point rather than assumed.
+        if w.visible_at(self._hwnd, points):
+            read = w.screen_samples(points)
+            if read is not None:
+                return read
+        # Covered, or on top of something else. A window can be asked to paint
+        # itself regardless — which works for plenty of windows and not for a
+        # game rendering through a flip-model swapchain, so it is the fallback
+        # and not the plan.
         return w.window_samples(self._hwnd, points)
 
     def _probe_filter(self) -> list[tuple[int, int, int]] | None:
@@ -261,13 +274,18 @@ class MacroEngine(QThread):
         if self.cfg.target.mode == "background":
             if not self._resolve_window():
                 return (f'no window called "{self.cfg.target.window_title}" — '
-                        "background delivery reads the game's own window, so it "
-                        "has to find it first")
-            return ("the game's window will not paint itself for the app. That "
-                    "is exclusive fullscreen, or a driver overlay — run ARK "
-                    "BORDERLESS and it can be read from behind. Foreground "
-                    "delivery would also work, at the cost of the window "
-                    "having to be in front")
+                        "background delivery has nothing to read or click")
+            covering = w.window_at(*start)
+            if covering and covering != self._hwnd:
+                title = w.window_title(covering) or "another window"
+                return (f'"{title}" is on top of the filter point, so the '
+                        "pixels there are its and not the game's. Background "
+                        "delivery reads the game where it is on screen — put "
+                        "ARK where nothing covers it, a second monitor being "
+                        "the easy way")
+            return ("the game is at that point but the pixels will not come "
+                    "back — exclusive fullscreen does this. Run ARK windowed "
+                    "or borderless")
         span = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         if span < PROBE_MIN_SPAN:
             return (f"the two captured points are only {span}px apart, too close "

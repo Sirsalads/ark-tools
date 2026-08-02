@@ -375,6 +375,12 @@ gdi32.GetDIBits.argtypes = (wintypes.HDC, wintypes.HBITMAP, wintypes.UINT,
 gdi32.GetDIBits.restype = ctypes.c_int
 user32.PrintWindow.argtypes = (wintypes.HWND, wintypes.HDC, wintypes.UINT)
 user32.PrintWindow.restype = wintypes.BOOL
+user32.WindowFromPoint.argtypes = (wintypes.POINT,)
+user32.WindowFromPoint.restype = wintypes.HWND
+user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+user32.GetAncestor.restype = wintypes.HWND
+
+GA_ROOT = 2
 
 # PrintWindow asks the window to draw itself into a DC of our choosing, which is
 # the only way to see a window that is not the one in front. CLIENTONLY drops the
@@ -383,6 +389,18 @@ user32.PrintWindow.restype = wintypes.BOOL
 # hands back an empty rectangle.
 PW_CLIENTONLY = 0x00000001
 PW_RENDERFULLCONTENT = 0x00000002
+
+
+def window_title(hwnd: int) -> str:
+    """That window's title, or "" — for naming whatever is covering the game."""
+    if not hwnd:
+        return ""
+    length = user32.GetWindowTextLengthW(hwnd)
+    if length <= 0:
+        return ""
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buffer, length + 1)
+    return buffer.value
 
 
 def list_windows() -> list[tuple[int, str]]:
@@ -583,6 +601,30 @@ def screen_samples(points) -> list[tuple[int, int, int]] | None:
             return None
         read.append(colour)
     return read
+
+
+def window_at(x: int, y: int) -> int:
+    """The top-level window actually drawn at that screen point, or 0."""
+    top = user32.WindowFromPoint(wintypes.POINT(int(x), int(y)))
+    if not top:
+        return 0
+    root = user32.GetAncestor(top, GA_ROOT)
+    return int(root or top)
+
+
+def visible_at(hwnd: int, points) -> bool:
+    """
+    Whether `hwnd` is what is on screen at every one of those points.
+
+    Not focused is not the same as not visible, and conflating the two is what
+    made background delivery blind. A second monitor is the ordinary case: the
+    game sits in plain sight on one screen while you work or play on the other,
+    nothing covering it, and the desktop pixels there *are* the game. Asking
+    Windows what is drawn at the point settles it without guessing.
+    """
+    if not hwnd:
+        return False
+    return all(window_at(x, y) == int(hwnd) for x, y in points)
 
 
 def window_shot(hwnd: int) -> tuple[list[tuple[int, int, int]], int, int] | None:

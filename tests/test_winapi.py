@@ -137,4 +137,22 @@ assert w.window_samples(1, [(101, 51)]) == [PAINTED[5]]
 assert w.window_samples(1, [(100, 50), (999, 999)]) is None
 print("OK  a window can be read from behind, in its own coordinates")
 
+# ------------------ 9) visible is not the same question as focused
+# Conflating the two is what made background delivery blind for three sessions.
+# A game sitting uncovered on a second monitor has no focus and is perfectly
+# readable; the only thing that stops a screen read being the game is something
+# drawn on top of it.
+GAME, OTHER = 4242, 777
+w.window_at = lambda x, y: OTHER if x > 500 else GAME
+
+assert w.visible_at(GAME, [(10, 10), (200, 40)]), \
+    "an uncovered window read as covered — this is the second-monitor case"
+assert not w.visible_at(GAME, [(10, 10), (900, 40)]), \
+    "one covered point is enough: those pixels belong to somebody else"
+assert not w.visible_at(GAME, [(900, 40)])
+assert w.visible_at(OTHER, [(900, 40)])
+# no window is not the game
+assert not w.visible_at(0, [(10, 10)])
+print("OK  visible is asked of Windows, not inferred from focus")
+
 print("\nALL WINAPI TESTS PASSED")

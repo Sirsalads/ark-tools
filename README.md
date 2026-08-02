@@ -658,30 +658,34 @@ dropped for inactivity.
 There is no reliable way to click into a UE5 game in the background without
 injecting into the process, which is what anticheat looks for.
 
-### The checks work in background too — through the window
+### The checks work in background too — visible is not focused
 
 Every guard in the app ends in a pixel read: the keyword has to be visibly in
-the search box, the panel has to be up, the stop sign has to see its icon. Read
-from the *screen*, all three are meaningless in background mode, because the
-screen belongs to whatever is in front. For a long time they simply gave up
-there, which silently switched off all of them at once.
+the search box, the panel has to be up, the stop sign has to see its icon.
 
-That is not a small footnote. One reported setup was an installed ARK farming in
-the background while a **second** ARK, on GeForce NOW, had the mouse and
-keyboard in front. Perfectly sensible, and the app spent three hours logging
-"the screen cannot be read" and refusing every drop — a setting doing exactly
-what it had been written to do.
+For a long time all three gave up in background mode, on the reasoning that "the
+game is behind other windows". That reasoning was never checked against a
+screen. One reported setup was an installed ARK farming in the background while
+a **second** ARK, on GeForce NOW, had the mouse and keyboard — on the other
+monitor. Nothing was covering anything. The window was in plain sight and its
+pixels were right there, and the app spent three hours logging "the screen
+cannot be read" and refusing every drop.
 
-A window paints itself on request regardless of who has focus (`PrintWindow`
-with `PW_RENDERFULLCONTENT`), so background reads the game's own window instead
-of the desktop. The stored points stay screen coordinates and go through the
-window's current position — the same conversion the posted clicks already use,
-so a window that moved does not take the points with it.
+**Not focused is not the same as not visible**, and the difference is the whole
+feature. Windows will say what is actually drawn at a point (`WindowFromPoint`),
+so the probe asks: if the game is what is on screen there, the desktop pixels
+*are* the game and it reads them, focus or no focus. On two monitors that is the
+normal case and it costs nothing.
 
-**It needs ARK borderless.** Exclusive fullscreen has nothing for a window to
-paint, and then background is back to no checks — which the app now says in the
-display check rather than leaving you to find out from a session that drops
-nothing.
+When something genuinely does cover the game, it falls back to asking the window
+to paint itself (`PrintWindow` with `PW_RENDERFULLCONTENT`). That works for
+plenty of windows and **not** for a UE5 game rendering through a flip-model
+swapchain — ARK is one of those, so treat it as a bonus and not the plan. If it
+fails there, the drop is refused rather than taken on somebody else's pixels,
+and the log names the window that is in the way.
+
+The short version for a two-monitor setup: **keep the ARK you are farming in
+view on one screen**, play on the other, and every check works.
 
 ### Why background is impossible on GeForce NOW
 

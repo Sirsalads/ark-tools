@@ -1344,11 +1344,12 @@ class MainWindow(QWidget):
                 "use the PC — or a second ARK — while this one farms. Unreal "
                 "sometimes reads Raw Input and ignores these, so test it: if "
                 "nothing happens in game, go back to foreground.\n\n"
-                "The safety checks work here too. They read the game's own "
-                "window rather than the screen, so being behind another window "
-                "costs nothing — but ARK has to be BORDERLESS. Exclusive "
-                "fullscreen paints nothing an app can read, and then every Drop "
-                "All is held back and the stop sign cannot arm.")
+                "The safety checks work here too, and the rule is one line: "
+                "keep that ARK window IN VIEW. Not focused — visible. On two "
+                "monitors, farm on one and play on the other; the pixels where "
+                "the macro looks really are the game, so the keyword check, the "
+                "panel wait and the stop sign all work. Only a window drawn on "
+                "top of it breaks that, and the log names the one in the way.")
 
     def _refresh_key_list(self) -> None:
         """Keep the dashboard key list showing the keys actually bound."""
@@ -2297,37 +2298,50 @@ class MainWindow(QWidget):
 
     def _window_reads(self) -> tuple[bool, str]:
         """
-        Can the game's own window be read while something else is in front?
+        Can the game be read while something else has the keyboard?
 
-        Only background delivery needs this, and it needs it for everything: in
-        that mode the screen belongs to whatever has focus, so the drop check,
-        the panel wait and the stop sign all go through the window instead. It
-        is the one thing that decides whether those guards work there, and it
-        cannot be answered without asking the actual window.
+        Only background delivery needs this, and it needs it for everything:
+        the drop check, the panel wait and the stop sign all end in a pixel.
+
+        It asks the question the way the engine answers it, in the same order.
+        A first version of this only tried making the window paint itself, and
+        told someone in exclusive fullscreen to change their display mode —
+        which they then did three times, in all three modes, because that was
+        never what was wrong. The window was on a second monitor in plain sight
+        the whole time.
         """
         title = self.cfg.target.window_title
         hwnd = w.find_window(title)
         if not hwnd:
-            return False, (f'no window matching "{title}" — nothing to read '
-                           "from, and background delivery has nothing to click "
-                           "either")
-        rect = w.client_rect(hwnd)
-        shot = w.window_shot(hwnd)
-        if shot is None:
-            return False, (f'"{title}" will not paint itself for the app '
-                           f"({rect[2]}x{rect[3]} client area) — that is "
-                           "exclusive fullscreen or a driver overlay. Run ARK "
-                           "BORDERLESS: background delivery reads the window, "
-                           "not the screen, so it needs this to work")
-        pixels, width, height = shot
-        shades = len({pixels[i] for i in range(0, len(pixels), max(len(pixels) // 400, 1))})
-        if shades < 3:
-            return False, (f'"{title}" painted {width}x{height} but it came '
-                           "back blank — the window is composited somewhere the "
-                           "app cannot follow. Borderless, or foreground "
-                           "delivery")
-        return True, (f'"{title}" reads fine from behind: {width}x{height}, '
-                      f"{shades} shades — the checks work in background too")
+            return False, (f'no window matching "{title}" — background '
+                           "delivery has nothing to read or click")
+        points = [self.cfg.drop.filter_point, self.cfg.drop.dropall_point]
+        points = [tuple(p) for p in points if any(p)]
+        if not points:
+            rect = w.client_rect(hwnd)
+            points = [(rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)] if rect else []
+        if not points:
+            return False, f'"{title}" has no readable rectangle'
+
+        if w.visible_at(hwnd, points):
+            read = w.screen_samples(points)
+            if read is not None:
+                return True, (f'"{title}" is uncovered where the macro looks '
+                              f"and reads fine: {read[0]} — the checks work in "
+                              "background, keep that window in view")
+            return False, (f'"{title}" is the window at those points but no '
+                           "pixels came back — that is exclusive fullscreen. "
+                           "Run it windowed or borderless")
+
+        covering = w.window_at(*points[0])
+        name = w.window_title(covering) or "something with no title"
+        if w.window_shot(hwnd) is not None:
+            return True, (f'"{name}" covers the game, but the window paints '
+                          "itself on request — the checks still work")
+        return False, (f'"{name}" is on top of the point the macro reads, and '
+                       "the game will not paint itself from underneath. Move "
+                       "ARK somewhere nothing covers it — a second monitor is "
+                       "the easy way — or use foreground delivery")
 
     def _round_trip_cursor(self) -> tuple[bool, str]:
         """

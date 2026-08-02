@@ -526,63 +526,88 @@ assert not any(c == ("click_at", 1400, 900) for c in slow)
 assert slow_engine.drops == 0
 print("OK  a realistic HUD drops when it should and never when it should not")
 
-# -------- 1d4) background delivery reads the game's window, not the screen
-# The reported setup: an installed ARK farming in the background while GeForce
-# NOW has the mouse and keyboard in front. The screen there belongs to the
-# session being played, not the one being farmed — so every probe used to give
-# up, which switched off the drop check, the panel wait and the stop sign at
-# once. Three hours of "the screen cannot be read", from a setting doing exactly
-# what it was written to do.
+# ---- 1d4) background delivery reads the game where it is, and it is on screen
+# The reported setup, twice misread. An installed ARK farms in the background on
+# one monitor while a second ARK, on GeForce NOW, has the mouse and keyboard on
+# the other.
 #
-# A window paints itself on request no matter who has focus, so background reads
-# that instead. The points stay screen coordinates and go through the window's
-# current position, the same conversion the posted clicks already use.
-cfg.target.mode = "background"
-cfg.drop.verify_filter = True
-cfg.drop.templates = [{"name": "Thatch", "keyword": "thatch", "enabled": True}]
+# Every probe used to give up in background mode on the reasoning that the game
+# is "behind other windows" — which switched off the drop check, the panel wait
+# and the stop sign together and produced three hours of "the screen cannot be
+# read". Then it tried making the window paint itself, which a UE5 game will not
+# do, and told someone to change display mode; they tried all three.
+#
+# Not focused is not the same as not covered. Nothing was ever in the way: the
+# window was in plain sight the whole time and the desktop pixels there were the
+# game. So the probe asks Windows what is drawn at the point, and reads the
+# screen when the answer is the game.
 
-window_reads: list[tuple] = []
-screen_reads: list[tuple] = []
-hud = RealisticHud()
 
-original = (FakeW.tap, FakeW.screen_samples, FakeW.type_text, FakeW.post_text,
-            FakeW.post_click, FakeW.post_key, FakeW.find_window,
-            FakeW.is_window)
-try:
+def drop_in_background(covered_by: int = 0, paints: bool = True):
+    """One background drop pass; returns (which read paths ran, the engine)."""
+    hud = RealisticHud()
+    used = {"screen": 0, "window": 0}
+    saved = (FakeW.screen_samples, FakeW.find_window, FakeW.is_window,
+             FakeW.post_text, FakeW.post_click, FakeW.post_key)
     FakeW.find_window = staticmethod(lambda _f: 4242)
     FakeW.is_window = staticmethod(lambda h: h == 4242)
-    # the screen is somebody else's game, and answering from it would be wrong
-    FakeW.screen_samples = staticmethod(
-        lambda points: screen_reads.append(tuple(points)) or [(9, 9, 9)] * len(points))
+    # what Windows says is drawn at those points: the game, or whatever covers it
+    FakeW.window_at = staticmethod(lambda _x, _y: covered_by or 4242)
+    FakeW.window_title = staticmethod(lambda hwnd: f"window {hwnd}")
+    FakeW.visible_at = staticmethod(
+        lambda hwnd, points: not covered_by and hwnd == 4242)
 
-    def fake_window_samples(hwnd, points):
-        window_reads.append(hwnd)
+    def screen_samples(points):
+        used["screen"] += 1
         return [hud.pixel(x, y) for x, y in points]
 
-    FakeW.window_samples = staticmethod(fake_window_samples)
-    FakeW.post_key = staticmethod(
-        lambda hwnd, vk, hold=0.0: hud.tap(vk))
+    def window_samples(hwnd, points):
+        used["window"] += 1
+        return [hud.pixel(x, y) for x, y in points] if paints else None
+
+    FakeW.screen_samples = staticmethod(screen_samples)
+    FakeW.window_samples = staticmethod(window_samples)
+    FakeW.post_key = staticmethod(lambda hwnd, vk, hold=0.0: hud.tap(vk))
     FakeW.post_text = staticmethod(
         lambda hwnd, text, delay=0.0: hud.type_text(text))
     FakeW.post_click = staticmethod(
         lambda hwnd, x, y, button="left", hold=0.0: hud.click_at(x, y))
+    try:
+        calls.clear()
+        worker = eng.MacroEngine(cfg)
+        worker.log.connect(lambda _m, _l: None)
+        worker._running = True
+        worker._run_drop()
+    finally:
+        (FakeW.screen_samples, FakeW.find_window, FakeW.is_window,
+         FakeW.post_text, FakeW.post_click, FakeW.post_key) = saved
+        del (FakeW.window_samples, FakeW.visible_at, FakeW.window_at,
+             FakeW.window_title)
+    return used, worker
 
-    calls.clear()
-    bg = eng.MacroEngine(cfg)
-    bg.log.connect(lambda _m, _l: None)
-    bg._running = True
-    bg._run_drop()
-finally:
-    (FakeW.tap, FakeW.screen_samples, FakeW.type_text, FakeW.post_text,
-     FakeW.post_click, FakeW.post_key, FakeW.find_window,
-     FakeW.is_window) = original
-    del FakeW.window_samples
 
-assert window_reads, "background never read the game's window"
-assert all(h == 4242 for h in window_reads)
-assert not screen_reads, "background read the screen, which is a different game"
-assert bg.drops == 1, "the drop pass did not complete in background"
+cfg.target.mode = "background"
+cfg.drop.verify_filter = True
+cfg.drop.templates = [{"name": "Thatch", "keyword": "thatch", "enabled": True}]
+
+# the second monitor: uncovered, unfocused, and perfectly readable
+used, seen = drop_in_background()
+assert used["screen"], "it never read the screen the game was visible on"
+assert not used["window"], "it went the hard way past a window in plain sight"
+assert seen.drops == 1, "the pass did not complete with the game in view"
 assert ("type", "thatch") in calls and ("click_at", 1400, 900) in calls
+
+# covered by something else: the screen there is not the game, so it must not be
+# read as if it were — the window is asked to paint instead
+used, painted = drop_in_background(covered_by=777)
+assert not used["screen"], "it read pixels belonging to the window on top"
+assert used["window"] and painted.drops == 1
+
+# covered, and a UE5 window that will not paint: no drop, rather than a drop on
+# somebody else's pixels
+used, blind = drop_in_background(covered_by=777, paints=False)
+assert blind.drops == 0, "it dropped without being able to see the game"
+assert not any(c == ("click_at", 1400, 900) for c in calls)
 
 cfg.target.mode = "foreground"
 cfg.drop.templates = [
@@ -590,7 +615,8 @@ cfg.drop.templates = [
     {"name": "Disabled", "keyword": "wood", "enabled": False},
     {"name": "Stone", "keyword": "stone", "enabled": True},
 ]
-print("OK  background delivery checks the game's own window and drops for real")
+print("OK  background reads the game where it is visible, and refuses when "
+      "something covers it")
 
 # ------------------- 1e) an unreadable screen holds the drop back
 # Reported from a real session: every pass logged "the search box cannot be

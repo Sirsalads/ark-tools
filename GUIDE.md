@@ -199,11 +199,11 @@ no pixels, the check cannot run, and rather than drop unverified the macro
 **holds the drop back and says so in red**. If every pass is refusing, that is
 what happened: switch ARK to borderless.
 
-On **background delivery** it reads the game's own window instead of the screen —
-the screen there belongs to whatever you have in front, which may well be another
-game. So the check works in background too, and it works while you use the PC.
-Same requirement: ARK **borderless**, because a window in exclusive fullscreen
-has nothing to hand over. The display check says which it is.
+On **background delivery** the rule is simple: **keep that ARK window in view**.
+Not focused — visible. On two monitors, farm on one and play on the other and
+every check works, because the pixels on screen where the macro looks really are
+the game. Only something drawn *on top* of it breaks that, and then the log names
+the window that is in the way rather than guessing.
 
 **A one- or two-letter keyword is flagged, not blocked.** `o` lists Stone, Wood,
 Cooked Meat, Hide Boots and most of your bag, and Drop All takes all of it. That
