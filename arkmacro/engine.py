@@ -70,6 +70,17 @@ FILTER_CHANGED_MAX = 0.70         # of the samples; above this the scene changed
 # How many times to wipe a box that will not come up empty before giving up on
 # that template. Two is enough for a queue catching up; more is a stuck game.
 EMPTY_ATTEMPTS = 2
+
+# The stop sign is the one check somebody is relying on to notice something for
+# them, so both of these are about it not lying by omission.
+#
+# A sighting has to hold for two looks. The icon stays up until a human deals
+# with it, so waiting one more poll costs nothing and a single torn frame or a
+# notification flashing past stops being able to end a farm.
+STOP_SIGHTINGS = 2
+# And a run of reads that come back nothing is not "no icon" — it is the check
+# not working, which looks exactly the same from here and must not.
+STOP_BLIND_LOOKS = 5
 # A wipe of the search box. The game clears the filter itself when Drop All
 # fires, so this is only for the boxes it has not cleared: the first template of
 # a pass (a human may have left something in there), a dry run, and the template
@@ -92,6 +103,8 @@ class MacroEngine(QThread):
         self.clicks = 0
         self.drops = 0
         self._hwnd: int | None = None
+        self._sign_streak = 0        # consecutive looks that showed the icon
+        self._sign_blind = 0         # consecutive looks that read nothing
 
     # --------------------------------------------------------------- api
     def request_stop(self) -> None:
@@ -560,15 +573,41 @@ class MacroEngine(QThread):
         """
         True when the watched patch has turned back into the captured icon.
 
-        A read that fails is not a sighting. The screen going unreadable is its
-        own problem and it is loud elsewhere; treating it as the icon here would
-        stop the macro for a reason that has nothing to do with the game.
+        A read that fails is not a sighting — treating it as one would stop the
+        macro for a reason that has nothing to do with the game. But it is not
+        "no icon" either, and that distinction is the whole of this method.
+
+        Blind and clear look identical from in here: both are "return False,
+        carry on farming". This is the one check somebody is relying on to
+        notice something for them, so it says when it has stopped being able to.
+        Cover that corner of the screen and the old version went quiet and kept
+        swinging, which is the failure it exists to prevent, arrived at from the
+        other side.
         """
         s = self.cfg.stop_sign
         fresh = self._read(stopsign.grid(s.area))
         if fresh is None:
+            self._sign_streak = 0
+            self._sign_blind += 1
+            if self._sign_blind == STOP_BLIND_LOOKS:
+                self.log.emit(
+                    "the stop sign cannot read its corner of the screen, so it "
+                    "is NOT watching any more. Something is covering it, or the "
+                    "game went exclusive fullscreen. Nothing will tell you the "
+                    "dino is full until this clears", "err")
             return False
+        if self._sign_blind >= STOP_BLIND_LOOKS:
+            self.log.emit("the stop sign can see its corner again — watching",
+                          "ok")
+        self._sign_blind = 0
+
         if not stopsign.seen(s.sample, fresh, s.tolerance, s.match_percent):
+            self._sign_streak = 0
+            return False
+        # one look is a frame; two is the icon, which stays up until somebody
+        # deals with it
+        self._sign_streak += 1
+        if self._sign_streak < STOP_SIGHTINGS:
             return False
         near = stopsign.score(s.sample, fresh, s.tolerance)
         self.log.emit(f"stop sign spotted ({near}% match) — stopping, same as "
@@ -825,12 +864,22 @@ class MacroEngine(QThread):
         self.state_changed.emit("farming")
         self.log.emit("macro armed", "ok")
 
+        self._sign_streak = self._sign_blind = 0
         stop_ok = cfg.stop_sign.enabled
         if stop_ok:
             problem = self._stop_sign_problem()
             if problem:
                 stop_ok = False
                 self.log.emit(f"stop sign off for this run: {problem}", "err")
+            elif self._read(stopsign.grid(cfg.stop_sign.area)) is None:
+                # Armed and blind is the worst state this can be in, and it is
+                # knowable right now rather than an hour into a farm nobody is
+                # watching.
+                self.log.emit(
+                    "stop sign armed but its corner of the screen cannot be "
+                    "read — it will NOT see the icon until that clears. "
+                    "Something is covering it, or the game is in exclusive "
+                    "fullscreen", "err")
             else:
                 self.log.emit("stop sign armed — the macro stops on its own if "
                               "that icon shows up", "ok")

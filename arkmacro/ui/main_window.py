@@ -773,18 +773,21 @@ class MainWindow(QWidget):
         self.stop_note = hint_label("")
         card.add(self.stop_note)
         card.add(hint_label(
-            "Capture it with the icon ACTUALLY ON SCREEN — that is the one way "
-            "to get this wrong, and the app says so rather than watching an "
-            "empty box forever.\n\n"
+            "Capture it with the icon ACTUALLY ON SCREEN, and leave a little "
+            "margin around it — the app needs some background to measure the "
+            "icon against. Both mistakes are caught at capture rather than "
+            "left to a farm that never stops.\n\n"
             "It does not remember a photograph. An ARK icon is drawn over the "
             "live 3D scene, so half of any box around it is rock and sky that "
             "change every frame — comparing colours drifts with the weather and "
             "never scores. What it remembers is the SHAPE: which samples stand "
             "out from the rest of the box, and which way. The background is "
             "never compared, so it is allowed to be anything.\n\n"
-            "It looks between clicks, never during a drop pass, never while "
-            "ARK is not the target, and a screen it cannot read is never a "
-            "sighting."))
+            "It looks between clicks, never during a drop pass, and never "
+            "while ARK is not the target. A screen it cannot read is never a "
+            "sighting — but it is not silence either: if it goes blind it says "
+            "so in red, because a check that quietly stops working is the exact "
+            "thing this is here to prevent."))
         return card
 
     def _forget_stop_sign(self) -> None:
@@ -2580,19 +2583,31 @@ class MainWindow(QWidget):
         # macro would watch that spot forever. Said here, at the moment the box
         # is dragged, rather than discovered by a farm that never stops.
         if len(marks) < stopsign.MARKS_MIN:
+            # Two different mistakes land here and they need opposite advice, so
+            # the message names both rather than guessing. All background means
+            # the icon was not showing; all icon means the box has nothing to
+            # measure the icon against, and the app cannot tell which from one
+            # reading of a uniform box.
             self._log(
-                f"nothing in that box stands out from its own background — "
-                f"only {len(marks)} of {len(s.sample)} samples. Either the icon "
-                "was not on screen when you captured, or the box is too loose "
-                "around it. Get the icon showing in ARK and capture again",
-                "err")
+                f"nothing in that box stands out from the rest of it — only "
+                f"{len(marks)} of {len(s.sample)} samples. Either the icon was "
+                "not on screen when you captured, or the box is so tight it is "
+                "ALL icon with no background around it. Get the icon showing, "
+                "and leave a little margin", "err")
             self._sync_stop_note()
             return
+        if len(marks) * 2 > len(s.sample):
+            self._log(
+                f"{len(marks)} of {len(s.sample)} samples are the icon, which "
+                "is more than half the box — leave a little more margin around "
+                "it. Past halfway the app starts measuring the icon against "
+                "itself instead of against what is behind it", "warn")
         margin = stopsign.contrast(s.sample, s.tolerance)
         self._log(f"stop sign captured: {len(marks)} of {len(s.sample)} samples "
-                  f"are the icon, standing out by {margin} on average. Colour "
-                  f"slack is {s.tolerance} — lower it if it never triggers",
-                  "ok")
+                  f"are the icon, standing out by {margin}. Contrast needed is "
+                  f"{s.tolerance}, so there is {margin - s.tolerance} to spare "
+                  "here — capture where you actually farm, a darker scene "
+                  "leaves less", "ok")
         self._sync_stop_note()
 
     def _sample_shot(self, spots) -> list[tuple[int, int, int]] | None:

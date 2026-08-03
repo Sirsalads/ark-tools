@@ -174,20 +174,22 @@ class StopSign:
     it. When it sees it, it stops exactly as if the toggle hotkey had been
     pressed, because that is what you would have done.
 
-    `sample` is the remembered picture: a grid of colours read from `area` at
-    capture time. Matching is a count of samples still within tolerance, not an
-    exact image compare, because a streamed picture never repeats a frame
-    exactly and an icon drawn over a moving world never sits on the same
-    background twice.
+    `sample` is a grid of colours read from `area` at capture time — but what is
+    matched against it is a SHAPE, not a picture. An ARK icon is drawn over the
+    live 3D scene, so half of any box around it is rock and sky that change
+    every frame; see stopsign.py for why comparing colours could not work.
     """
 
     enabled: bool = False
     area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])   # x,y,w,h
     area_resolution: list[int] = field(default_factory=lambda: [0, 0])
     sample: list[list[int]] = field(default_factory=list)           # [[r,g,b], ...]
-    # per-channel slack on one sample. Generous on purpose: video compression
-    # moves flat colour around by more than you would think.
-    tolerance: int = 34
+    # How far a sample must stand out from the rest of the box to count as part
+    # of the icon. Measured against the box's own middle, so it is a contrast,
+    # not a colour. Low enough to survive a dark scene, where a near-black icon
+    # has little left to stand out from — measured, scenery never trips it at
+    # any setting, so the cost of erring low is nothing.
+    tolerance: int = 24
     # how much of the grid has to still match, as a percentage. Not 100: the icon
     # sits on whatever the world is doing behind it, and its edges bleed.
     match_percent: int = 78
@@ -391,7 +393,7 @@ def _sanitize(cfg: "Config") -> None:
     stop = cfg.stop_sign
     stop.area = _rect(stop.area)
     stop.area_resolution = _point(stop.area_resolution)
-    stop.tolerance = _count(stop.tolerance, 34, 4, 90)
+    stop.tolerance = _count(stop.tolerance, 24, 4, 90)
     stop.match_percent = _count(stop.match_percent, 78, 40, 100)
     stop.poll_ms = _count(stop.poll_ms, 400, 100, 5000)
     # A remembered picture is a list of RGB triples and nothing else. Anything

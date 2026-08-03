@@ -1145,26 +1145,56 @@ assert "capture" in watcher._stop_sign_problem(), watcher._stop_sign_problem()
 cfg.stop_sign.sample = captured
 assert watcher._stop_sign_problem() == "", watcher._stop_sign_problem()
 
-# an unreadable screen is not a sighting: it is a different problem, loud
-# somewhere else, and stopping the farm for it would be stopping for nothing
-levels.clear()
-watcher.log.connect(lambda _m, level: levels.append(level))
+# An unreadable screen is not a sighting — but it is not silence either. Blind
+# and "no icon" are the same answer from in here, and this is the one check
+# somebody is relying on to notice something for them, so it has to say when it
+# has stopped being able to. Going quiet and carrying on is the failure it
+# exists to prevent, reached from the other side.
+messages: list[tuple[str, str]] = []
+watcher.log.connect(lambda message, level: messages.append((level, message)))
 watcher._running = True
-assert watcher._stop_sign_seen() is False, "None from the screen read as the icon"
+for _ in range(eng.STOP_BLIND_LOOKS):
+    assert watcher._stop_sign_seen() is False, "None from the screen read as the icon"
 assert watcher._running, "an unreadable screen stopped the macro"
+assert any(level == "err" and "NOT watching" in text for level, text in messages), \
+    f"it went blind without a word: {messages}"
+# and said once, not on every poll
+blind_lines = sum(1 for _l, text in messages if "NOT watching" in text)
+for _ in range(eng.STOP_BLIND_LOOKS * 3):
+    watcher._stop_sign_seen()
+assert sum(1 for _l, t in messages if "NOT watching" in t) == blind_lines
 
-# and when the icon really is there — over scenery it has never seen — it stops
 original_samples = FakeW.screen_samples
 try:
+    # the icon over scenery it has never seen — and one look is not a sighting,
+    # because a torn frame or a notification flashing past must not end a farm
     FakeW.screen_samples = staticmethod(
         lambda points: [tuple(c) for c in over(WATER)])
+    messages.clear()
+    assert watcher._stop_sign_seen() is False, "one frame was enough to stop"
+    assert watcher._running
+    assert any("can see its corner again" in text for _l, text in messages), \
+        "it started seeing again without saying so"
     assert watcher._stop_sign_seen() is True, "the icon over new scenery was missed"
     assert not watcher._running, "it saw the icon and kept farming"
-    assert "err" in levels, "it stopped without saying why"
-    # and open world on that spot leaves it alone
+    assert any(level == "err" for level, _t in messages), "it stopped silently"
+
+    # a flicker does not accumulate: scenery between two sightings resets it
     watcher._running = True
+    watcher._sign_streak = 0
+    FakeW.screen_samples = staticmethod(lambda points: [tuple(c) for c in over(SKY)])
+    assert watcher._stop_sign_seen() is False
     FakeW.screen_samples = staticmethod(lambda points: [tuple(SKY)] * len(points))
     assert watcher._stop_sign_seen() is False
+    FakeW.screen_samples = staticmethod(lambda points: [tuple(c) for c in over(SKY)])
+    assert watcher._stop_sign_seen() is False, "two looks a minute apart counted"
+    assert watcher._running
+
+    # and open world on that spot never counts, however long it is there
+    watcher._sign_streak = 0
+    FakeW.screen_samples = staticmethod(lambda points: [tuple(SKY)] * len(points))
+    for _ in range(10):
+        assert watcher._stop_sign_seen() is False
     assert watcher._running
 finally:
     FakeW.screen_samples = original_samples

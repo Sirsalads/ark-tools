@@ -661,9 +661,35 @@ Measured on a simulated HUD, same icon, same capture:
 | rock, no icon | silent | silent |
 
 Two dials. **Contrast needed** is how far a pixel must stand out to count as
-part of the icon — capture reports the margin it measured, so lower it if the
-icon never triggers. **Match needed** is how much of the *icon* has to be there;
-the background does not vote.
+part of the icon — capture reports the margin it measured and how much is to
+spare. **Match needed** is how much of the *icon* has to be there; the
+background does not vote.
+
+**Capture it where you actually farm.** That is the one real limitation of a
+contrast measure and it is worth stating plainly: a near-black icon over a
+near-black cave has little left to stand out from. Measured on a simulated HUD,
+the icon is found comfortably over rock, sky, water and dusk, and starts to slip
+in a scene as dark as itself. Scenery on its own never triggers it at any
+setting, so if it misses where you farm, lower **Contrast needed** — erring low
+costs nothing.
+
+### It says when it stops being able to see
+
+A sighting has to hold for **two looks**, because the icon stays up until a
+human deals with it while a torn frame or a notification flashing past does not.
+
+And a run of reads that come back nothing is **not** treated as "no icon". Blind
+and clear are the same answer from inside the check — carry on farming — and
+this is the one guard somebody is relying on to notice something for them. So it
+says so, in red, and again when it recovers:
+
+```
+the stop sign cannot read its corner of the screen, so it is NOT watching any
+more. Something is covering it, or the game went exclusive fullscreen
+```
+
+It is also checked at the moment you arm, rather than an hour into a farm nobody
+is watching.
 
 It looks between clicks, never during a drop pass, never while ARK is not the
 target, and a screen it cannot read is never a sighting. In background delivery

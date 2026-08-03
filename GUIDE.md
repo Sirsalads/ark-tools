@@ -282,9 +282,19 @@ drifts with the weather. It stores the **shape** — which samples stand out fro
 the rest of the box, and which way — and the background is never compared. So the
 same icon is found over rock, over sky, over water, and at night.
 
+**Capture it where you actually farm.** A near-black icon over a near-black cave
+has little left to stand out from — that is the one real limit. If it misses
+where you play, lower *Contrast needed*; scenery on its own never triggers it at
+any setting, so going low costs nothing.
+
 Two dials if it misbehaves. **Never triggers** → lower *Contrast needed* (capture
-tells you the margin it measured) or lower *Match needed*. **Triggers on its own**
-→ raise *Match needed*, or drag a tighter box.
+tells you the margin and how much is to spare) or lower *Match needed*.
+**Triggers on its own** → raise *Match needed*, or drag a tighter box.
+
+If it ever stops being able to see that corner — something covering it, the game
+going exclusive fullscreen — it says so **in red** rather than quietly carrying
+on. A guard that stops working without telling you is the thing this exists to
+prevent.
 
 It never looks during a drop pass, never while ARK is not in front, and a screen
 it cannot read is never a sighting.
