@@ -182,5 +182,31 @@ if (-not $Launch) {
 
 Write-Step "Starting"
 # pythonw, so closing this window does not take the app with it and no console
-# hangs around behind it
-Start-Process -FilePath $VenvPythonW -ArgumentList (Join-Path $Root 'main.py') -WorkingDirectory $Root
+# hangs around behind it. The cost of that is a process with nowhere to write:
+# anything raised on the way up used to vanish, and this window closed on a
+# machine where the app never appeared. So the launch is watched.
+$app = Start-Process -FilePath $VenvPythonW -PassThru `
+    -ArgumentList (Join-Path $Root 'main.py') -WorkingDirectory $Root
+
+# A window takes a moment. Dying takes less, and the difference is the whole
+# signal: still running after this means it got up.
+Start-Sleep -Seconds 4
+if ($app.HasExited) {
+    Write-Bad "the app started and then closed straight away."
+    $report = Join-Path $Root 'state\startup-error.txt'
+    if (Test-Path -LiteralPath $report) {
+        Write-Host ""
+        Write-Host "  --- $report ---" -ForegroundColor DarkGray
+        Get-Content -LiteralPath $report | Select-Object -Last 25
+        Write-Host ""
+    } else {
+        Write-Note "nothing was written to $report either, so it did not get"
+        Write-Note "far enough to report. Running it visibly now:"
+        Write-Host ""
+        & $VenvPython (Join-Path $Root 'main.py')
+    }
+    Write-Host ""
+    Write-Host "  Send the lines above with any report." -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}

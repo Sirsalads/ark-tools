@@ -1176,6 +1176,38 @@ win.showNormal()
 print("OK  the display check measures with itself hidden, and a background run "
       "moves it out of the way")
 
+# ------------------- 27) a start that fails has to be findable
+# The app is launched with pythonw.exe, which has no console. That is what keeps
+# a black window from sitting behind it all session, and it also means anything
+# raised on the way up goes to a stream that does not exist. A machine where the
+# app would not start showed a command window for a few seconds and then nothing
+# at all, forever, with the reason written to nowhere.
+import runpy  # noqa: E402
+import main as entry  # noqa: E402
+
+report = pathlib.Path(entry.CRASH_LOG)
+report.parent.mkdir(parents=True, exist_ok=True)
+report.write_text("stale, from a failure that has since been fixed")
+
+boxes: list[tuple] = []
+entry.ctypes = type("Fake", (), {"windll": type("W", (), {"user32": type("U", (), {
+    "MessageBoxW": staticmethod(lambda *a: boxes.append(a)),
+    "SetProcessDpiAwarenessContext": staticmethod(lambda *a: 1),
+})()})()})()
+
+entry._report("Traceback (most recent call last):\n"
+              "ImportError: DLL load failed while importing QtGui")
+assert report.exists(), "a startup failure left nothing behind"
+written = report.read_text()
+assert "DLL load failed" in written, written
+assert "stale" not in written, "it appended to an old report instead of replacing"
+assert boxes, "it wrote a file nobody has been told about"
+shown = boxes[-1][1]
+assert "DLL load failed" in shown, shown
+assert str(report) in shown, "the box does not say where the rest is"
+report.unlink(missing_ok=True)
+print("OK  a startup that fails writes a report and says so on screen")
+
 win.hotkeys.stop()
 win.close()
 print("\nALL UI TESTS PASSED")

@@ -1,2 +1,9 @@
-# 6.11 is the first release with abi3 wheels covering Python 3.13/3.14
-PySide6>=6.11
+# 6.11 is the first release with abi3 wheels covering Python 3.13/3.14.
+#
+# The upper bound is not decoration. Without it the version installed depends on
+# the DAY a machine was set up, so two people on the same commit run different
+# Qt — which is how one laptop can fail to start while the desktop beside it is
+# fine, with nothing in the app to explain it. A minor Qt release is allowed to
+# break things; patch releases are not, so the line is pinned and the patches
+# come free.
+PySide6>=6.11,<6.12

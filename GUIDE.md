@@ -52,8 +52,13 @@ Everything it downloaded lives **inside the app folder**. Nothing was added to
 your PATH, nothing was installed for other users, and deleting the folder removes
 all of it.
 
-> **If the window does not appear**, run this in the app folder — it changes
-> nothing and prints what it found:
+> **If the window does not appear**, the app will tell you why. A start that
+> fails puts a message box on screen and writes the whole reason to
+> `state\startup-error.txt`, and the command window stays open with the last
+> lines of it rather than closing on you.
+>
+> To look at the machine without starting anything — it changes nothing and
+> prints what it found:
 >
 > ```
 > powershell -ExecutionPolicy Bypass -File tools\setup.ps1 -CheckOnly
