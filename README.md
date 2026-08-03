@@ -39,7 +39,9 @@ powershell -ExecutionPolicy Bypass -File tools\setup.ps1 -CheckOnly
 ```
 
 It reports the Python it found, whether the packages are installed, and whether
-`git` is present.
+`git` is present. The last one matters: **in-app updates need `git`**, and a copy
+downloaded as a ZIP instead of cloned has no repository to pull into. The Updates
+card says so when that is the case.
 
 **If the app starts and closes immediately**, that is now reported rather than
 silent. It is launched with `pythonw.exe` so no console window sits behind it
@@ -47,10 +49,8 @@ all session, and the cost of that is a process with nowhere to write — anythin
 raised on the way up used to vanish, leaving a command window that flashed for a
 few seconds and then nothing, forever. A failed start now writes
 `state\startup-error.txt`, puts the last line of it in a message box, and the
-bootstrap waits to see whether the app survived its first seconds: if it did
-not, the window stays open with the report in it. The last one matters: **in-app updates need `git`**, and a copy
-downloaded as a ZIP instead of cloned has no repository to pull into. The Updates
-card says so when that is the case.
+bootstrap waits to see whether the app survived its first seconds: if it did not,
+the window stays open with the report in it.
 
 </details>
 
