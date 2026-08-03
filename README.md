@@ -626,32 +626,50 @@ food this is pressing — the drop list and the feed slots have to agree.
 **Farm → Stop on an icon.** Show the app an icon once; it stops the macro the
 moment that icon comes back.
 
-A broken pick, an overloaded character, a dead mount — the game says all of it
-on screen and none of it anywhere the app can reach. It cannot read the game, so
-it is shown the picture instead: capture freezes the screen, you drag a box
-around the icon, and the colours inside are remembered as a grid of samples.
-While farming it re-reads that grid between clicks and counts how many still
-match. Enough of them, and it stops exactly as the toggle hotkey would.
+A capped dino, a broken pick, a dead mount — the game says all of it on screen
+and none of it anywhere the app can reach. On a duo farm this is the signal that
+matters most: the autoclick stopping is what tells the other person to come and
+empty the thing.
 
-A count with slack rather than an image compare, because two things are always
-true of this picture: it is drawn over a moving world, so its edges and
-transparent parts never repeat; and on a streamed session the whole frame is
-lossy, so flat colour arrives a few values off. An exact compare would never
-fire. A loose count still only matches the icon, because the alternative to the
-icon is not a similar icon — it is a different part of the screen, which misses
-almost everywhere.
+**Capture it with the icon actually on screen.** That is the one way to get this
+wrong, and the app refuses rather than watching an empty box forever.
 
-The one way to get this wrong is a box with empty HUD in it. That is nearly one
-flat colour, and flat colour matches half the screen — the macro would stop at
-random for the rest of the session. So capture counts the distinct shades it
-found and refuses the box in red when there are too few, at the moment you drag
-it rather than an hour into a farm.
+### What it remembers is a shape, not a photograph
 
-Two dials. **Never triggers** → lower *Match needed* or raise *Colour slack*.
-**Triggers on its own** → raise *Match needed* or drag a tighter box. It never
-looks during a drop pass, never while ARK is not in front, and a screen it
-cannot read is never a sighting — that is a different problem, loud elsewhere,
-and stopping the farm for it would be stopping for nothing.
+The first version stored the colours in the box and compared them. It did not
+work, and the reason is plain in any screenshot: an ARK HUD icon is drawn **over
+the live 3D scene**. Half the samples in any box around it land on rock, sky and
+water that change every frame. Comparing colours means the score moves with the
+weather — it fired when the scenery happened to match the capture and stayed
+silent the rest of the time.
+
+What holds still is the shape. Capture records **which samples stand out from
+the rest of the box, and which way** — the near-black silhouette is darker than
+whatever is behind it, wherever you are standing. Matching asks whether those
+same samples still stand out that way, measured against the box's own middle
+*at that moment*. The background is never compared, so it is free to be
+anything, and a scene that is dark at night moves the middle down with it.
+
+Measured on a simulated HUD, same icon, same capture:
+
+| | colour photograph | shape and contrast |
+|---|---|---|
+| icon over the rock it was captured on | fires | fires |
+| icon over sky | silent | fires |
+| icon over water | silent | fires |
+| icon at night | silent | fires |
+| rock, no icon | silent | silent |
+
+Two dials. **Contrast needed** is how far a pixel must stand out to count as
+part of the icon — capture reports the margin it measured, so lower it if the
+icon never triggers. **Match needed** is how much of the *icon* has to be there;
+the background does not vote.
+
+It looks between clicks, never during a drop pass, never while ARK is not the
+target, and a screen it cannot read is never a sighting. In background delivery
+the app minimises itself on Start when it is sitting over the icon, because a
+stop sign that cannot see is worse than a drop that cannot be verified: a
+skipped drop costs a cycle, a missed icon means nobody is told.
 
 ## Anti-AFK
 

@@ -1083,44 +1083,66 @@ assert Config.load(split).hold_drop.mode == "hold"
 split.unlink()
 print("OK  a hold-to-drop config from before the split keeps its behaviour")
 
-# --------------------------------- 8b) the stop sign, and what it must not do
-# Show it an icon, and the macro stops the moment the icon comes back. The
-# hazard is the mirror image of the drop guard's: there, a wrong yes empties a
-# bag; here, a wrong yes stops a farm that was fine, and a wrong no leaves the
-# macro swinging at something that will never break.
-ICON = [[20, 22, 26]] * 30 + [[220, 60, 55]] * 20 + [[240, 240, 240]] * 14
+# --------------------------------- 8b) the stop sign, over a scene that moves
+# Show it an icon, and the macro stops the moment the icon comes back. That is
+# what tells a duo the dino is capped and needs emptying, so a wrong NO leaves
+# them swinging at a full bag and a wrong YES stops a farm that was fine.
+#
+# The first version remembered the box as a photograph and did not work, for the
+# reason a screenshot makes obvious: an ARK icon is drawn OVER the live 3D
+# scene. Half the samples in any box around it land on rock, sky and water that
+# change every frame, so comparing colours drifts with the weather.
+#
+# What holds still is the shape — which samples stand out from the rest of the
+# box, and which way. Everything below is that property, and the background is
+# deliberately made as hostile as possible.
+DARK = [20, 22, 26]           # the icon: a near-black silhouette
 
-# the same picture, arriving over a lossy stream: every value nudged
-streamed = [[min(255, c + 9) for c in colour] for colour in ICON]
-assert ark_stop.seen(ICON, streamed, 34, 78), "compression alone lost the icon"
-assert ark_stop.score(ICON, streamed, 34) == 100
 
-# a different part of the screen misses on nearly every sample
-elsewhere = [[130, 190, 95]] * len(ICON)
-assert not ark_stop.seen(ICON, elsewhere, 34, 78), "it matched open world"
+def over(background):
+    """The same icon drawn over whatever background, as a 64-sample reading."""
+    return [list(DARK) if index % 4 == 0 else list(background)
+            for index in range(64)]
 
-# half the box covered by something else is not the icon any more
-half = ICON[:32] + [[130, 190, 95]] * (len(ICON) - 32)
-assert not ark_stop.seen(ICON, half, 34, 78), f"{ark_stop.score(ICON, half, 34)}%"
+
+ROCK, SKY, WATER = [150, 152, 158], [190, 205, 225], [60, 110, 140]
+captured = over(ROCK)
+
+# the same icon over completely different scenery still reads as the icon —
+# this is the case that used to fail, and it is the normal case in game
+for name, scene in (("sky", SKY), ("water", WATER), ("rock", ROCK)):
+    assert ark_stop.seen(captured, over(scene), 34, 78), \
+        f"the icon over {name} was not recognised ({ark_stop.score(captured, over(scene), 34)}%)"
+
+# scenery with no icon on it is not the icon, however busy it is
+for scene in (ROCK, SKY, WATER):
+    assert not ark_stop.seen(captured, [list(scene)] * 64, 34, 78), \
+        "empty scenery matched the icon"
+# nor is a scene that moves under the box without the icon coming back
+noisy = [[c + (index % 7) - 3 for c in ROCK] for index in range(64)]
+assert not ark_stop.seen(captured, noisy, 34, 78), "a moving background matched"
+
+# a box captured with the icon NOT showing has nothing to look for, and that is
+# the one way to get this wrong — it has to be detectable at capture time
+assert len(ark_stop.signature([list(ROCK)] * 64, 34)) < ark_stop.MARKS_MIN
+assert not ark_stop.seen([list(ROCK)] * 64, over(ROCK), 34, 78), \
+    "a capture with no icon in it matched something"
+assert len(ark_stop.signature(captured, 34)) >= ark_stop.MARKS_MIN
+assert ark_stop.contrast(captured, 34) > 34, "the margin is not reported"
 
 # a grid is the same points in the same order for the same box, or a remembered
-# reading compares against pixels it was never taken from
+# mark compares against pixels it was never taken from
 box = [400, 300, 64, 64]
 assert ark_stop.grid(box) == ark_stop.grid(box)
 assert len(ark_stop.grid(box)) == 64
 assert all(400 <= x < 464 and 300 <= y < 364 for x, y in ark_stop.grid(box))
 assert ark_stop.grid([0, 0, 0, 0]) == []
 
-# a patch of flat colour would match half the screen, and the app has to be able
-# to say so before it is armed rather than after it has stopped a good farm
-assert ark_stop.distinct([[20, 22, 26]] * 40, 34) == 1
-assert ark_stop.distinct(ICON, 34) == 3
-
 cfg.stop_sign.enabled = True
 cfg.stop_sign.area = [400, 300, 64, 64]
 watcher = eng.MacroEngine(cfg)
 assert "capture" in watcher._stop_sign_problem(), watcher._stop_sign_problem()
-cfg.stop_sign.sample = [[20, 22, 26]] * 64
+cfg.stop_sign.sample = captured
 assert watcher._stop_sign_problem() == "", watcher._stop_sign_problem()
 
 # an unreadable screen is not a sighting: it is a different problem, loud
@@ -1131,17 +1153,17 @@ watcher._running = True
 assert watcher._stop_sign_seen() is False, "None from the screen read as the icon"
 assert watcher._running, "an unreadable screen stopped the macro"
 
-# and when the icon really is there, it stops — the same stop the toggle does
+# and when the icon really is there — over scenery it has never seen — it stops
 original_samples = FakeW.screen_samples
-FakeW.screen_samples = staticmethod(lambda points: [(20, 22, 26)] * len(points))
 try:
-    assert watcher._stop_sign_seen() is True
+    FakeW.screen_samples = staticmethod(
+        lambda points: [tuple(c) for c in over(WATER)])
+    assert watcher._stop_sign_seen() is True, "the icon over new scenery was missed"
     assert not watcher._running, "it saw the icon and kept farming"
     assert "err" in levels, "it stopped without saying why"
-    # something else on that spot leaves it alone
+    # and open world on that spot leaves it alone
     watcher._running = True
-    FakeW.screen_samples = staticmethod(
-        lambda points: [(130, 190, 95)] * len(points))
+    FakeW.screen_samples = staticmethod(lambda points: [tuple(SKY)] * len(points))
     assert watcher._stop_sign_seen() is False
     assert watcher._running
 finally:
@@ -1149,8 +1171,8 @@ finally:
 cfg.stop_sign.enabled = False
 cfg.stop_sign.sample = []
 cfg.stop_sign.area = [0, 0, 0, 0]
-print("OK  the stop sign knows its icon from the world, and never from a blind "
-      "screen")
+print("OK  the stop sign finds its icon over any scenery, and never in scenery "
+      "alone")
 
 # ------------------------------------------------- 9) preset risk flags
 assert presets.risk_of("stone")[0] == "high"

@@ -727,9 +727,9 @@ class MainWindow(QWidget):
         card = Card(
             "Stop on an icon", icon="eye", subtitle=
             "Show the app an icon once and it stops the macro the moment that "
-            "icon comes back — a broken tool, an overloaded character, "
-            "anything the game only says on screen. Exactly what pressing the "
-            "toggle key does, except it happens the instant it appears.")
+            "icon comes back — a capped dino, a broken tool, anything the game "
+            "only says on screen. Exactly what pressing the toggle key does, "
+            "except it happens the instant it appears.")
         self.sw_stop = SwitchRow("Stop when the icon appears",
                                  self.cfg.stop_sign.enabled)
         card.add(self.sw_stop)
@@ -756,14 +756,16 @@ class MainWindow(QWidget):
 
         sgrid = FormGrid(pairs=2)
         self.sp_stop_tol = spin(4, 90, self.cfg.stop_sign.tolerance, "", 2)
-        sgrid.add("Colour slack", self.sp_stop_tol,
-                  "How far a colour may drift and still count. Raise it on a "
-                  "streamed session, where nothing arrives exactly")
+        sgrid.add("Contrast needed", self.sp_stop_tol,
+                  "How far a pixel must stand out from the rest of the box to "
+                  "count as part of the icon. Lower it if the icon never "
+                  "triggers; capture reports the margin it measured")
         self.sp_stop_match = spin(40, 100, self.cfg.stop_sign.match_percent,
                                   " %", 2)
         sgrid.add("Match needed", self.sp_stop_match,
-                  "How much of the box has to match. Lower it if it never "
-                  "triggers, raise it if it triggers on its own")
+                  "How much of the ICON has to be there — the background is "
+                  "never compared. Lower it if it never triggers, raise it if "
+                  "it triggers on its own")
         self.sp_stop_poll = spin(100, 3000, self.cfg.stop_sign.poll_ms, " ms", 50)
         sgrid.add("Look every", self.sp_stop_poll)
         card.add(sgrid)
@@ -771,11 +773,18 @@ class MainWindow(QWidget):
         self.stop_note = hint_label("")
         card.add(self.stop_note)
         card.add(hint_label(
-            "Drag the box tight around the icon and nothing else. A box with "
-            "empty HUD in it matches half the screen and would stop the macro "
-            "at random, so the app counts the shades it captured and says so "
-            "when there are too few. It looks between clicks and never during "
-            "a drop pass, and a screen it cannot read is never a sighting."))
+            "Capture it with the icon ACTUALLY ON SCREEN — that is the one way "
+            "to get this wrong, and the app says so rather than watching an "
+            "empty box forever.\n\n"
+            "It does not remember a photograph. An ARK icon is drawn over the "
+            "live 3D scene, so half of any box around it is rock and sky that "
+            "change every frame — comparing colours drifts with the weather and "
+            "never scores. What it remembers is the SHAPE: which samples stand "
+            "out from the rest of the box, and which way. The background is "
+            "never compared, so it is allowed to be anything.\n\n"
+            "It looks between clicks, never during a drop pass, never while "
+            "ARK is not the target, and a screen it cannot read is never a "
+            "sighting."))
         return card
 
     def _forget_stop_sign(self) -> None:
@@ -793,11 +802,18 @@ class MainWindow(QWidget):
             self.stop_note.setText("No icon captured yet. Bring the icon up in "
                                    "ARK, then hit Capture the icon.")
             return
-        shades = stopsign.distinct(s.sample, s.tolerance)
+        marks = stopsign.signature(s.sample, s.tolerance)
+        if len(marks) < stopsign.MARKS_MIN:
+            self.stop_note.setText(
+                f"Nothing stands out in that box — only {len(marks)} of "
+                f"{len(s.sample)} samples. Capture it again with the icon "
+                "actually on screen.")
+            return
         self.stop_note.setText(
             f"Watching a {s.area[2]}x{s.area[3]} px box at "
-            f"({s.area[0]}, {s.area[1]}) — {len(s.sample)} samples, {shades} "
-            "distinct shades.")
+            f"({s.area[0]}, {s.area[1]}) — {len(marks)} of {len(s.sample)} "
+            f"samples are the icon, standing out by "
+            f"{stopsign.contrast(s.sample, s.tolerance)}.")
 
     # ----------------------------------------------------------------- drop
     def _page_drop(self) -> QWidget:
@@ -1585,10 +1601,15 @@ class MainWindow(QWidget):
         Get this window off the game before a background run starts.
 
         In background delivery the macro reads the game where it sits on screen,
-        so anything drawn over the two captured points blinds every check. This
-        window is the likeliest culprit and the only one the app can do anything
-        about: it is the one you were just clicking Start in, and on a single
-        monitor it is almost certainly on top of the game.
+        so anything drawn over the places it looks blinds a check. This window
+        is the likeliest culprit and the only one the app can do anything about:
+        it is the one you were just clicking Start in, and on a single monitor
+        it is almost certainly on top of the game.
+
+        Every place it looks, not just the drop points — the stop sign watches
+        its own corner of the HUD, and covering that one is worse. A drop that
+        cannot be verified is skipped and costs a cycle; a stop sign that cannot
+        see its icon means nobody is told the dino is full.
 
         Minimising is the right answer rather than a warning, because a
         minimised app is what you wanted anyway once the farm is running — the
@@ -1600,6 +1621,9 @@ class MainWindow(QWidget):
             return
         points = [tuple(p) for p in (self.cfg.drop.filter_point,
                                      self.cfg.drop.dropall_point) if any(p)]
+        stop = self.cfg.stop_sign
+        if stop.enabled and stop.sample and sweep.usable(stop.area):
+            points += stopsign.grid(stop.area)
         if not points:
             return
         # through the same normalisation the probe uses, or a toolkit that wraps
@@ -2550,13 +2574,25 @@ class MainWindow(QWidget):
             self._log("could not read that area — nothing captured", "err")
             return
         s.sample = [list(colour) for colour in fresh]
-        shades = stopsign.distinct(s.sample, s.tolerance)
-        self._log(f"stop sign captured: {len(s.sample)} samples, {shades} "
-                  "distinct shades", "ok")
-        if shades < 3:
-            self._log("that patch is nearly one flat colour, so it will match "
-                      "half the screen and stop the macro at random — pick a "
-                      "box tight around the icon itself", "err")
+        marks = stopsign.signature(s.sample, s.tolerance)
+        # The one way to get this wrong is to capture the box while the icon is
+        # NOT showing: there is then nothing standing out to look for, and the
+        # macro would watch that spot forever. Said here, at the moment the box
+        # is dragged, rather than discovered by a farm that never stops.
+        if len(marks) < stopsign.MARKS_MIN:
+            self._log(
+                f"nothing in that box stands out from its own background — "
+                f"only {len(marks)} of {len(s.sample)} samples. Either the icon "
+                "was not on screen when you captured, or the box is too loose "
+                "around it. Get the icon showing in ARK and capture again",
+                "err")
+            self._sync_stop_note()
+            return
+        margin = stopsign.contrast(s.sample, s.tolerance)
+        self._log(f"stop sign captured: {len(marks)} of {len(s.sample)} samples "
+                  f"are the icon, standing out by {margin} on average. Colour "
+                  f"slack is {s.tolerance} — lower it if it never triggers",
+                  "ok")
         self._sync_stop_note()
 
     def _sample_shot(self, spots) -> list[tuple[int, int, int]] | None:

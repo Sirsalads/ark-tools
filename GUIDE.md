@@ -272,13 +272,19 @@ way to read the game. So show it the icon once.
 From then on it looks at that box between clicks, and the moment the icon is back
 it stops the macro — exactly what pressing `F6` does, except immediately.
 
-**Drag tight.** A box with empty HUD in it is nearly one flat colour, which
-matches half the screen and would stop your farm at random. The app counts the
-distinct shades it captured and refuses the box in red when there are too few.
+**The icon has to be on screen when you capture.** That is the one way to get
+this wrong — there would be nothing to look for, and the macro would watch an
+empty box forever. The app checks and refuses in red.
 
-Two dials if it misbehaves. **Never triggers** → lower *Match needed*, or raise
-*Colour slack* (a streamed picture never arrives twice the same). **Triggers on
-its own** → raise *Match needed*, or drag a tighter box.
+It does not store a picture. An ARK icon is drawn over the live 3D scene, so half
+of any box around it is rock and sky that change every frame; comparing colours
+drifts with the weather. It stores the **shape** — which samples stand out from
+the rest of the box, and which way — and the background is never compared. So the
+same icon is found over rock, over sky, over water, and at night.
+
+Two dials if it misbehaves. **Never triggers** → lower *Contrast needed* (capture
+tells you the margin it measured) or lower *Match needed*. **Triggers on its own**
+→ raise *Match needed*, or drag a tighter box.
 
 It never looks during a drop pass, never while ARK is not in front, and a screen
 it cannot read is never a sighting.

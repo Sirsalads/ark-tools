@@ -1091,14 +1091,19 @@ assert win.cfg.stop_sign.sample, "nothing was captured"
 assert (1, 2, 3) not in [tuple(c) for c in win.cfg.stop_sign.sample], \
     "it read the live screen instead of the frozen capture"
 assert any("stop sign captured" in ln for ln in lines), lines
-shades = stopsign.distinct(win.cfg.stop_sign.sample, win.cfg.stop_sign.tolerance)
-assert shades >= 2, f"the red square and the white one read as {shades} shade(s)"
+marks = stopsign.signature(win.cfg.stop_sign.sample, win.cfg.stop_sign.tolerance)
+assert len(marks) >= stopsign.MARKS_MIN, \
+    f"the red square and the white one stood out on only {len(marks)} samples"
 
-# a box dragged over empty HUD is flat, matches half the screen, and has to be
-# called out at capture time rather than discovered by a farm stopping at random
+# A box captured with no icon in it has nothing standing out to look for, so the
+# macro would watch that spot forever. It is the one way to get this wrong, and
+# it has to be said at the moment the box is dragged.
 lines.clear()
-win._on_area_picked(500, 400, 30, 30)      # all background
-assert any("flat colour" in ln and ln.startswith("err:") for ln in lines), lines
+win._on_area_picked(500, 400, 30, 30)      # all background, no icon
+assert any("stands out" in ln and ln.startswith("err:") for ln in lines), lines
+assert win.cfg.stop_sign.sample, "the reading itself is still kept"
+assert len(stopsign.signature(win.cfg.stop_sign.sample,
+                              win.cfg.stop_sign.tolerance)) < stopsign.MARKS_MIN
 
 # A resolution change is the one thing a rescale cannot save here. The box could
 # be moved like the sweep areas, but what it holds is a remembered picture, and
