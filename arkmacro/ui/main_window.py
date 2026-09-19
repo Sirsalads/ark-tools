@@ -65,6 +65,13 @@ HOTBAR = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # hold-to-drop run modes, in the order the combo lists them
 HOLD_MODES = ["toggle", "hold", "manual"]
 
+# How often the activation keys are looked at. A tap is 50-150 ms of key-down,
+# and the read is a level, so a slow poll can sit on either side of a quick one
+# and never see it. This is fast enough to catch a real tap on its own, and
+# GetAsyncKeyState's "pressed since last call" bit (winapi.key_tapped) covers
+# the ones that still fall between two ticks. The read costs microseconds.
+KEY_POLL_MS = 20
+
 
 def spin(minimum, maximum, value, suffix="", step=1) -> QSpinBox:
     box = QSpinBox()
@@ -217,8 +224,13 @@ class MainWindow(QWidget):
         # stops the sweep on the next tick instead of at the end of a lap, and
         # the window never freezes while it runs.
         self._hold_watch = QTimer(self)
-        self._hold_watch.setInterval(60)
+        self._hold_watch.setInterval(KEY_POLL_MS)
         self._hold_watch.timeout.connect(self._watch_keys)
+        # the key each feature is currently being watched on, or "". Tracked
+        # per feature, not per timer: the timer is shared, so "was it already
+        # running" cannot say whether THIS key has been primed (see _prime_key)
+        self._hold_watching = ""
+        self._skin_watching = ""
         # which feature owns the running sweep: they share one cursor, so only
         # one of them can be moving it
         self._sweep_kind = ""
@@ -236,7 +248,9 @@ class MainWindow(QWidget):
         self._skin_stacks = 0
         self._skin_missing = 0
         self._skin_finished = False
-        self._hold_refused = False
+        # the last reason a sweep was refused, so hold modes — which ask on
+        # every tick the key is down — say it once instead of 50 times a second
+        self._refused = ""
         # toggling acts on the press, so the level has to be remembered between
         # ticks to tell a new press from a key that is simply still down
         self._hold_was_down = False
@@ -1681,17 +1695,30 @@ class MainWindow(QWidget):
 
     # ---------------------------------------------------------- hold to drop
     def _sync_key_watch(self) -> None:
+        """
+        Start or stop the key watcher to match what the two features can do.
+
+        Hold-to-drop is watched once it is on and has an area. Skin overcap is
+        watched once it has its two points — on OR off. Off, a press starts
+        nothing, but it is still seen, so the log can say "that key is off" at
+        the moment it is pressed. A key that does nothing and says nothing is
+        how a working capture gets reported as a broken macro.
+        """
         hold = self.cfg.hold_drop
         skin = self.cfg.skin_overcap
         drop_ready = hold.enabled and sweep.usable(hold.area)
-        skin_ready = skin.enabled and painting.ready(skin)
-        if drop_ready or skin_ready:
-            if not self._hold_watch.isActive():
-                vk = w.vk_from_name(hold.key if hold.mode == "manual"
-                                    else hold.activate_key)
-                self._hold_was_down = bool(vk is not None and w.key_is_down(vk))
-                vk = w.vk_from_name(skin.activate_key)
-                self._skin_was_down = bool(vk is not None and w.key_is_down(vk))
+        skin_armed = painting.ready(skin)
+        skin_ready = skin.enabled and skin_armed
+        # prime a key when it starts being watched, and again when the watched
+        # key itself changes — a mode switch moves hold-to-drop between keys
+        hold_key = hold.key if hold.mode == "manual" else hold.activate_key
+        if drop_ready and self._hold_watching != hold_key:
+            self._hold_was_down = self._prime_key(hold_key)
+        if skin_armed and self._skin_watching != skin.activate_key:
+            self._skin_was_down = self._prime_key(skin.activate_key)
+        self._hold_watching = hold_key if drop_ready else ""
+        self._skin_watching = skin.activate_key if skin_armed else ""
+        if drop_ready or skin_armed:
             self._hold_watch.start()
         else:
             self._hold_watch.stop()
@@ -1702,6 +1729,38 @@ class MainWindow(QWidget):
             self._stop_sweep()
         self._refresh_hold_status()
         self._refresh_skin_status()
+
+    @staticmethod
+    def _prime_key(name: str) -> bool:
+        """
+        Read a key once before watching it, and return whether it is down.
+
+        Two things are settled by this read. The level seeds the edge detector,
+        so a key already held when watching begins is not taken for a fresh
+        press. And the read clears the "pressed since last call" bit, which may
+        have been sitting set since a press nobody was listening for — ten
+        minutes ago, with the feature off. Left alone, the watcher's first tick
+        would act on that stale press.
+        """
+        vk = w.vk_from_name(name)
+        if vk is None:
+            return False
+        w.key_tapped(vk)
+        return w.key_is_down(vk)
+
+    @staticmethod
+    def _key_edge(vk: int, was_down: bool) -> tuple[bool, bool]:
+        """
+        (down, pressed) for one tick of watching a key.
+
+        `pressed` is the edge: a key that is down now and was not on the last
+        tick — or one that went down and came back up in between, which the
+        level alone cannot see and the tap bit can. The tap bit is read first
+        because reading the level clears it (winapi.key_tapped).
+        """
+        tapped = w.key_tapped(vk)
+        down = w.key_is_down(vk)
+        return down, tapped or (down and not was_down)
 
     def _watch_keys(self) -> None:
         """One poll for both key-driven sweeps. They share the cursor."""
@@ -1731,16 +1790,33 @@ class MainWindow(QWidget):
             f"{driven}.")
 
     def _refresh_skin_status(self) -> None:
+        """
+        Say what the activation key will do right now — including nothing.
+
+        The note used to read "press F4 to paint" whatever the state of the
+        switch above it, and a reader who had just captured two good points
+        took it at its word. Now the switch and the points come first: a key
+        that is going to be ignored is announced as one.
+        """
         skin = self.cfg.skin_overcap
+        key = skin.activate_key.upper()
         problem = self._skin_problem()
         if problem:
             self.skin_note.setText(f"{problem[0].upper()}{problem[1:]}. "
                                    "Skin overcap will refuse to run.")
+        elif not skin.enabled:
+            self.skin_note.setText(
+                f"Switched off — «{key}» does nothing until the switch above "
+                "is on.")
+        elif not painting.ready(skin):
+            self.skin_note.setText(
+                f"Capture the two points below before «{key}» will do "
+                "anything.")
         else:
             starts = "Hold" if skin.mode == "hold" else "Press"
             self.skin_note.setText(
-                f"{starts} «{skin.activate_key.upper()}» in ARK to paint in "
-                "cycles of 100 clicks, selecting the next dye automatically.")
+                f"{starts} «{key}» with ARK in front to paint in cycles of "
+                "100 clicks, selecting the next dye automatically.")
         if not painting.ready(skin):
             self.lbl_skin_points.setText(
                 "Capture both points with a dye visible before starting.")
@@ -1749,22 +1825,43 @@ class MainWindow(QWidget):
             f"Painting: {tuple(skin.paint_point)} · First dye: "
             f"{tuple(skin.dye_point)} · 100 clicks per cycle")
 
-    def _can_sweep(self) -> bool:
-        """Whether it is safe to start a sweep right now, and say why not once."""
+    def _sweep_block(self) -> str:
+        """Why a sweep cannot start right now, or "" when it can."""
         if self._picking:
-            return False
+            return "the screen is frozen for picking"
         # an autoclick loose in an open inventory moves items around; the sweep
         # would be the least of the damage
         if self.engine is not None and self.engine.isRunning():
-            if not self._hold_refused:
-                self._hold_refused = True
-                self._log("sweep ignored while the farm macro is running — "
-                          "stop it first", "warn")
-            return False
-        # cleared here rather than on a key release: toggling never sees one, so
-        # a refusal logged once would be the last word for the whole session
-        self._hold_refused = False
-        return w.is_foreground(w.find_window(self.cfg.target.window_title))
+            return "the farm macro is running — stop it first"
+        title = self.cfg.target.window_title
+        hwnd = w.find_window(title)
+        if not hwnd:
+            return f'no window with "{title}" in its title is open'
+        if not w.is_foreground(hwnd):
+            front = w.window_title(w.foreground_window())
+            where = f" — «{front}» is" if front else ""
+            return f"ARK is not the window in front{where}"
+        return ""
+
+    def _can_sweep(self, key: str, once: bool = False) -> bool:
+        """
+        Whether a sweep may start right now — and when it may not, say why.
+
+        Every refusal used to be silent but one, and a silent one is the worst
+        outcome there is: the key was pressed, nothing moved, and the log had
+        nothing to say about it. A toggle press asks once and is answered once.
+        Hold modes ask on every tick the key is down, so with `once` the reason
+        is said the first time and held back until it changes or the key is
+        released, which clears `_refused`.
+        """
+        why = self._sweep_block()
+        if not why:
+            self._refused = ""
+            return True
+        if not once or why != self._refused:
+            self._log(f"«{key.upper()}» ignored: {why}", "warn")
+        self._refused = why
+        return False
 
     def _hold_problem(self) -> str:
         """Why hold-to-drop cannot run, or "" when it can."""
@@ -1796,9 +1893,8 @@ class MainWindow(QWidget):
             # keep the edge detector current even while standing down, or a key
             # held throughout somebody else's sweep reads as a fresh press the
             # moment that sweep ends and starts this one on its own
-            self._hold_was_down = w.key_is_down(
-                w.vk_from_name(hold.key if hold.mode == "manual"
-                               else hold.activate_key) or 0)
+            self._hold_was_down = self._prime_key(
+                hold.key if hold.mode == "manual" else hold.activate_key)
             return
         problem = self._hold_problem()
         if problem:
@@ -1807,10 +1903,8 @@ class MainWindow(QWidget):
             # shared, and skin overcap may still be using it
             self.sw_hold.switch.setChecked(False)
             return
-        vk = w.vk_from_name(hold.key if hold.mode == "manual"
-                            else hold.activate_key)
-        down = w.key_is_down(vk)
-        pressed = down and not self._hold_was_down
+        key = hold.key if hold.mode == "manual" else hold.activate_key
+        down, pressed = self._key_edge(w.vk_from_name(key), self._hold_was_down)
         self._hold_was_down = down
 
         if hold.mode == "toggle":
@@ -1818,64 +1912,89 @@ class MainWindow(QWidget):
                 return
             if self._sweep_timer.isActive():
                 self._stop_sweep()
-            elif self._can_sweep():
+            elif self._can_sweep(key):
                 self._start_drop_sweep()
             return
 
         if not down:
             self._stop_sweep()
-            self._hold_refused = False
+            self._refused = ""
             return
         if self._sweep_timer.isActive():
             return
-        if self._can_sweep():
+        if self._can_sweep(key, once=True):
             self._start_drop_sweep()
 
     def _skin_problem(self) -> str:
+        """Why skin overcap cannot run, or "" when it can."""
         skin = self.cfg.skin_overcap
+        hold = self.cfg.hold_drop
         vk = w.vk_from_name(skin.activate_key)
         if vk is None:
             return f'the activation key "{skin.activate_key}" is not a key name'
         if vk in {w.vk_from_name(key) for key in vars(self.cfg.hotkeys).values()}:
             return "the activation key is already a global hotkey; choose another"
+        # the two sweeps share one cursor, and a shared key would have them
+        # racing for it on every press — whichever is polled first wins
+        if hold.enabled and skin.activate_key in (hold.activate_key, hold.key):
+            return ("the activation key is also hold-to-drop's key; choose "
+                    "another")
         return ""
 
     def _watch_skin_key(self) -> None:
-        """Start and stop painting from the activation key."""
+        """
+        Start and stop painting from the activation key.
+
+        The key is watched as soon as the two points exist, switch or no
+        switch. Off, a press is answered in the log and nothing else happens;
+        on, a press that cannot be acted on is answered with the reason. The
+        one thing a press never is, is silent.
+        """
         skin = self.cfg.skin_overcap
-        if not (skin.enabled and painting.ready(skin)):
+        if not painting.ready(skin):
             return
         if self._sweep_kind == "drop":
-            self._skin_was_down = w.key_is_down(
-                w.vk_from_name(skin.activate_key) or 0)
+            # standing down, but keeping the edge detector current (see the
+            # same step in _watch_hold_key)
+            self._skin_was_down = self._prime_key(skin.activate_key)
             return
-        problem = self._skin_problem()
-        if problem:
-            self._log(f"skin overcap off: {problem}", "err")
-            self.sw_skin.switch.setChecked(False)
-            return
+        if skin.enabled:
+            problem = self._skin_problem()
+            if problem:
+                self._log(f"skin overcap off: {problem}", "err")
+                self.sw_skin.switch.setChecked(False)
+                return
         vk = w.vk_from_name(skin.activate_key)
-        down = w.key_is_down(vk)
-        pressed = down and not self._skin_was_down
+        if vk is None:
+            return
+        down, pressed = self._key_edge(vk, self._skin_was_down)
         self._skin_was_down = down
         if not down:
             self._skin_finished = False
+        key = skin.activate_key
+        if not skin.enabled:
+            if pressed:
+                self._log(f"«{key.upper()}» pressed, but skin overcap is "
+                          "switched off — turn it on at the top of the Overcap "
+                          "skin page", "warn")
+            return
 
         if skin.mode == "toggle":
             if not pressed:
                 return
             if self._sweep_timer.isActive():
                 self._stop_sweep()
-            elif self._can_sweep():
+            elif self._can_sweep(key):
                 self._start_skin_painting()
             return
 
         if not down:
             self._stop_sweep()
+            self._refused = ""
             return
         if self._sweep_timer.isActive() or self._skin_finished:
             return
-        if self._can_sweep():
+        if self._can_sweep(key, once=True):
             self._start_skin_painting()
 
     def _start_drop_sweep(self) -> None:
@@ -1892,7 +2011,9 @@ class MainWindow(QWidget):
 
     def _start_skin_painting(self) -> None:
         skin = self.cfg.skin_overcap
-        if not painting.ready(skin) or not self._can_sweep():
+        # the caller has just asked _can_sweep and been told yes; asking again
+        # here would only log the same refusal twice
+        if not painting.ready(skin) or self._sweep_block():
             return
         self._sweep_kind = "skin"
         self._skin_phase = "check"
@@ -2764,10 +2885,15 @@ class MainWindow(QWidget):
             skin.dye_sample = [list(colour) for colour in sample]
             skin.points_resolution = list(w.screen_size())
             self._skin_pick_points = {}
+            # Two points were just picked for this and nothing else, so the
+            # switch goes on with them. Leaving it for the reader to find was
+            # how a good capture turned into "F4 does nothing".
+            self.sw_skin.switch.setChecked(True)
             self._on_change()
             self._save()
-            self._log("painting points and dye captured; enable skin overcap "
-                      "and use its activation key in ARK", "ok")
+            self._log(f"painting points and dye captured — skin overcap is on. "
+                      f"Press «{skin.activate_key.upper()}» with ARK in front "
+                      "to start", "ok")
             return
         _x, _y, width, height = self._game_area()
         self.cfg.drop.points_resolution = [width, height]

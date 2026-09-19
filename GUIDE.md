@@ -378,7 +378,8 @@ On **Overcap skin**, capture two points from the frozen screen:
    dye itself, away from the quantity text and slot border; this also captures
    its color for the check that tells when it is gone.
 
-Enable the macro, return to ARK, and press **`F4`**. It selects the first dye,
+Capturing the two points switches the macro on. Return to ARK and press
+**`F4`**. It selects the first dye,
 clicks the upper point **100 times**, then selects the next stack at the same
 lower point and repeats. You do not need to count your stacks or select them
 one by one. The macro finishes when the first slot has no matching dye for
@@ -397,6 +398,12 @@ Press **`F4` again to stop**, or **`F8` for emergency stop**. It also stops if
 ARK loses focus, the screen cannot be read, you disable it or close the app.
 Stop Farm and Drop before starting it. Capture again after changing the dye,
 HUD, game window position or resolution.
+
+**Nothing happens when you press `F4`?** Open the **Log** page: every press
+that goes nowhere says why — the switch is off, ARK is not the window in front
+(it names the one that is), the farm macro is running, or the screen is frozen
+for picking. The note under the switch on the Overcap skin page says the same
+before you press anything.
 
 ---
 

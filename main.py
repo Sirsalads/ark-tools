@@ -21,16 +21,28 @@ MB_ICONERROR = 0x10
 
 
 def _claim_dpi_awareness() -> None:
-    user32 = getattr(ctypes, "windll", None)
-    if user32 is None:              # not Windows: nothing to claim
+    if getattr(ctypes, "windll", None) is None:     # not Windows: nothing to claim
         return
+    user32 = ctypes.windll.user32
+    claimed = False
     try:
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(DPI_PER_MONITOR_V2)
+        # The context is a HANDLE — pointer-sized — and the pseudo-handles are
+        # small negative numbers. Handed over as a bare Python int, ctypes
+        # passes a 32-bit -4, which on a 64-bit process is not the same value:
+        # Windows answered ERROR_INVALID_PARAMETER and the claim silently did
+        # nothing. Qt made the same claim a moment later, which is the only
+        # reason nobody noticed.
+        call = user32.SetProcessDpiAwarenessContext
+        call.argtypes = [ctypes.c_void_p]
+        call.restype = ctypes.c_bool
+        claimed = bool(call(ctypes.c_void_p(DPI_PER_MONITOR_V2)))
     except (AttributeError, OSError):
-        # older than Windows 10 1703, or already set by something else — the
-        # call failing is not a reason to refuse to start
+        pass                        # older than Windows 10 1703
+    if not claimed:
+        # already set by something else, or the newer call is missing — a
+        # refused claim is not a reason to refuse to start
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            user32.SetProcessDPIAware()
         except (AttributeError, OSError):
             pass
 

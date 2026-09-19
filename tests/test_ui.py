@@ -1070,6 +1070,128 @@ activate["down"] = False
 w_module.key_is_down = lambda _vk: held["down"]
 print("OK  skin refuses an invalid setup and never overlaps hold-to-drop")
 
+# ------------------------- 23g) a press is never silent
+# The feature was reported as "F4 does nothing" by someone whose two points
+# were perfect: the switch was off, and nothing said so. Every way a press can
+# go nowhere now says why in the log, and a capture switches the feature on.
+said: list[str] = []
+quiet_log = win._log
+win._log = lambda message, level="info": said.append(f"{level}:{message}")
+tap = {"bit": False}
+real_tapped = w_module.key_tapped
+w_module.key_tapped = lambda _vk: tap.pop("bit") if tap.get("bit") else False
+w_module.key_is_down = lambda vk: activate["down"] and vk == 0x73
+
+# points captured, switch off: the key is still watched, and the press is
+# answered instead of swallowed
+win.sw_skin.switch.setChecked(False)
+win._pull()
+assert not win.cfg.skin_overcap.enabled
+assert win._hold_watch.isActive(), "points behind a key and nobody watching it"
+assert "Switched off" in win.skin_note.text(), win.skin_note.text()
+activate["down"] = False
+win._watch_skin_key()
+activate["down"] = True
+win._watch_skin_key()
+activate["down"] = False
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "painted with the switch off"
+assert any("switched off" in ln and ln.startswith("warn:") for ln in said), said
+said.clear()
+
+# switch on, ARK not in front: the press is refused with the reason
+win.sw_skin.switch.setChecked(True)
+win._pull()
+assert "Switched off" not in win.skin_note.text()
+w_module.is_foreground = lambda _h: False
+activate["down"] = True
+win._watch_skin_key()
+activate["down"] = False
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "painted into somebody else's window"
+assert any("F4» ignored" in ln and "not the window in front" in ln
+           for ln in said), said
+said.clear()
+w_module.is_foreground = lambda _h: True
+
+# a tap too quick for the poll: the level never reads down, the tap bit does,
+# and that alone must start — and, pressed again, stop — the painting
+tap["bit"] = True
+win._watch_skin_key()
+assert win._sweep_timer.isActive() and win._sweep_kind == "skin", \
+    "a tap between two ticks was lost"
+assert not tap, "the tap bit was read more than once on a tick"
+tap["bit"] = True
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "a second quick tap did not stop it"
+
+# a tap bit left over from before the key was watched is not a press: priming
+# the key when watching begins consumes it
+win.sw_skin.switch.setChecked(False)
+win.cfg.skin_overcap.paint_point = [0, 0]      # not armed: nobody is watching
+win._pull()
+assert not win._hold_watch.isActive()
+tap["bit"] = True                               # pressed while nobody listened
+win.cfg.skin_overcap.paint_point = list(paint_point)
+win.sw_skin.switch.setChecked(True)
+win._pull()                                     # watching begins: primed here
+assert not tap, "priming did not consume the stale tap bit"
+said.clear()
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "a stale tap bit started painting"
+assert not said, said
+
+# hold modes ask on every tick: the refusal is said once, not once per tick
+win.cb_skin_mode.setCurrentIndex(1)             # hold the key
+win._pull()
+w_module.is_foreground = lambda _h: False
+said.clear()
+activate["down"] = True
+for _ in range(5):
+    win._watch_skin_key()
+assert sum("F4» ignored" in ln for ln in said) == 1, said
+activate["down"] = False
+win._watch_skin_key()
+activate["down"] = True
+win._watch_skin_key()
+assert sum("F4» ignored" in ln for ln in said) == 2, \
+    "releasing and holding again did not get a fresh answer"
+activate["down"] = False
+win._watch_skin_key()
+w_module.is_foreground = lambda _h: True
+win.cb_skin_mode.setCurrentIndex(0)
+win._pull()
+
+# a finished capture switches the feature on: two points were just picked
+# for this and nothing else
+win.sw_skin.switch.setChecked(False)
+win._pull()
+shot = QPixmap(400, 700)
+shot.fill(QColor(20, 22, 26))
+painter = QPainter(shot)
+painter.fillRect(150, 480, 80, 80, QColor(220, 25, 20))    # the dye icon
+painter.end()
+win._shot = shot
+win._shot_origin = (0, 0)
+win._pick_kind = "skin"
+win._picking = True
+win._skin_pick_points = {"paint": [160, 320], "dye": [190, 520]}
+said.clear()
+win._finish_pick()
+assert win.cfg.skin_overcap.enabled, "a capture left the switch off"
+assert win.sw_skin.switch.isChecked()
+assert win.cfg.skin_overcap.paint_point == [160, 320]
+assert win.cfg.skin_overcap.dye_point == [190, 520]
+assert any("skin overcap is on" in ln and "F4" in ln for ln in said), said
+assert "F4" in win.skin_note.text() and "Switched off" not in win.skin_note.text()
+
+w_module.key_tapped = real_tapped
+w_module.key_is_down = lambda _vk: held["down"]
+win.sw_skin.switch.setChecked(False)
+win._pull()
+win._log = quiet_log
+print("OK  every ignored press says why, a quick tap counts, and a capture arms it")
+
 # ------------------------------------------------- 24) the area picker
 from arkmacro.ui.picker import AreaPicker  # noqa: E402
 

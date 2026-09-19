@@ -155,6 +155,22 @@ def key_is_down(vk: int) -> bool:
     return bool(user32.GetAsyncKeyState(int(vk)) & 0x8000)
 
 
+def key_tapped(vk: int) -> bool:
+    """
+    True when the key has gone down since the last time anybody asked.
+
+    `key_is_down` reads a level, and a level polled every few dozen
+    milliseconds can miss a quick tap entirely: the finger is off the key
+    before the next tick sees it. Windows also keeps a "pressed since the last
+    call" bit for every key, and this reads that. Reading it clears it — for
+    this process and every other one — so it is a supplement to the level, not
+    a replacement: another program polling the same key can steal the bit, and
+    then the level is what is left. Because of the clearing, call this BEFORE
+    `key_is_down` on the same tick, or the level read eats the tap.
+    """
+    return bool(user32.GetAsyncKeyState(int(vk)) & 0x0001)
+
+
 def _scan(vk: int) -> int:
     return user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
 
@@ -495,6 +511,11 @@ def find_window(fragment: str) -> int | None:
 
 def is_window(hwnd: int) -> bool:
     return bool(hwnd) and bool(user32.IsWindow(hwnd))
+
+
+def foreground_window() -> int:
+    """The window in front right now, or 0 — for naming what is not ARK."""
+    return int(user32.GetForegroundWindow() or 0)
 
 
 def is_foreground(hwnd: int) -> bool:

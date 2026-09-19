@@ -547,8 +547,13 @@ longer contains the captured dye.
    the **colored center of the first dye icon** below. Avoid the stack count,
    slot border and empty background. The frozen capture also supplies the color
    reference used to recognize the dye.
-4. Enable the macro, return to ARK, and press **`F4`** to start. Press `F4`
-   again to stop, or **`F8`** for the emergency stop.
+4. A finished capture switches the macro on. Return to ARK and press **`F4`**
+   to start. Press `F4` again to stop, or **`F8`** for the emergency stop.
+
+**If `F4` seems to do nothing, read the log.** A press is never silent: the
+log says whether the switch is off, ARK is not the window in front (and which
+window is), the farm macro is running, or the screen is frozen for picking.
+The note under the switch says the same thing before you press anything.
 
 The macro selects the first dye stack at the start. Each cycle then sends 100
 clicks to the upper point, waits for the list to settle, checks the first slot,
@@ -578,7 +583,9 @@ misses clicks, increase the timings; a remaining stack will be selected again.
   appear before the next action. The configured **GeForce NOW stream latency**
   is added to these waits.
 - The activation key is watched, so it also reaches ARK. Choose a key the game
-  has nothing bound to.
+  has nothing bound to, and not the one hold-to-drop uses.
+- The key is read 50 times a second, and a tap too quick for even that is
+  still caught: Windows remembers a press until somebody asks about it.
 - Losing focus, disabling the macro or closing the app stops painting. Farm,
   Drop and Overcap skin cannot operate the cursor at the same time.
 
