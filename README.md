@@ -556,9 +556,10 @@ window is), the farm macro is running, or the screen is frozen for picking.
 The note under the switch says the same thing before you press anything.
 
 The macro selects the first dye stack at the start. Each cycle then sends 100
-clicks to the upper point, waits for the list to settle, checks the first slot,
-and selects it again if dye remains. There is no number of stacks to enter:
-stacks farther down the list move into the same slot as earlier ones disappear.
+clicks to the upper point, checks the first slot, selects it again if dye
+remains, and goes **straight back to clicking** — there is no waiting in the
+cycle unless you add some. There is no number of stacks to enter: stacks
+farther down the list move into the same slot as earlier ones disappear.
 
 ### How it decides the dye is finished
 
@@ -573,15 +574,22 @@ you change the color, move the game window, change the HUD or change resolution.
 
 **Partial stacks are supported.** A stack with 97 dyes still receives 100 click
 attempts before the next selection. There is no OCR of the quantity: the counter
-reports **click attempts**, not a verified number of dyes consumed. If the game
-misses clicks, increase the timings; a remaining stack will be selected again.
+reports **click attempts**, not a verified number of dyes consumed. Clicks the
+game misses cost nothing: a remaining stack is simply selected again.
 
 ### Timing and stopping
 
-- **Click interval** defaults to **80 ms**. Raise it if ARK misses paint clicks.
-- **Stack wait** defaults to **500 ms**, allowing selection and list updates to
-  appear before the next action. The configured **GeForce NOW stream latency**
-  is added to these waits.
+- **Time between clicks** defaults to **0** — as fast as clicks can be sent,
+  which is a few hundred a second, in short bursts so the window (and the stop
+  key) stay responsive. That is far more than the game takes, and it does not
+  have to take them all: the game sets the real pace, the app just never
+  waits. Raise it only if ARK visibly misses paint clicks; the button is held
+  longer at slower settings.
+- **Pause before the next stack** defaults to **0**. It sits after the 100
+  clicks and before the first slot is read and selected; selecting always goes
+  straight back to painting. The configured **GeForce NOW stream latency** is
+  added to it. An empty reading is retried no sooner than 250 ms apart
+  whatever this says, so a list caught mid-redraw does not end the run.
 - The activation key is watched, so it also reaches ARK. Choose a key the game
   has nothing bound to, and not the one hold-to-drop uses.
 - The key is read 50 times a second, and a tap too quick for even that is

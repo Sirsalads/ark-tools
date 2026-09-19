@@ -120,7 +120,7 @@ class PaintingConfigTests(unittest.TestCase):
             enabled=True, activate_key="f5", mode="hold",
             paint_point=[161, 318], dye_point=[192, 525],
             points_resolution=[1920, 1080], dye_sample=sample(),
-            click_interval_ms=120, stack_wait_ms=900)
+            click_interval_ms=120, stack_pause_ms=900)
         config.save(self.path)
         restored = Config.load(self.path)
         self.assertEqual(asdict(restored.skin_overcap), asdict(config.skin_overcap))
@@ -131,28 +131,48 @@ class PaintingConfigTests(unittest.TestCase):
         skin = self.load_skin({
             "paint_point": "nonsense", "dye_point": [192],
             "points_resolution": None, "dye_sample": sample()[:24],
-            "click_interval_ms": -1, "stack_wait_ms": 99999,
+            "click_interval_ms": -1, "stack_pause_ms": 99999,
             "activate_key": " F4 ", "mode": "invalid",
         })
         self.assertEqual(skin.paint_point, [0, 0])
         self.assertEqual(skin.dye_point, [0, 0])
         self.assertEqual(skin.points_resolution, [0, 0])
         self.assertEqual(skin.dye_sample, [])
-        self.assertEqual(skin.click_interval_ms, 50)
-        self.assertEqual(skin.stack_wait_ms, 5000)
+        self.assertEqual(skin.click_interval_ms, 0)
+        self.assertEqual(skin.stack_pause_ms, 5000)
         self.assertEqual(skin.activate_key, "f4")
         self.assertEqual(skin.mode, "toggle")
         self.assertFalse(painting.ready(skin))
 
     def test_waits_have_bounds_and_fallbacks(self):
-        for click, wait, expected in ((99999, -1, (2000, 100)),
-                                      (None, "invalid", (80, 500)),
-                                      ("125", "750", (125, 750))):
+        for click, pause, expected in ((99999, -1, (2000, 0)),
+                                       (None, "invalid", (0, 0)),
+                                       ("125", "750", (125, 750))):
+            with self.subTest(click=click, pause=pause):
+                skin = self.load_skin({"paint_point": [1, 2],
+                                      "click_interval_ms": click,
+                                      "stack_pause_ms": pause})
+                self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms),
+                                 expected)
+
+    def test_old_pacing_moves_to_the_new_floor_once(self):
+        # the old default (80) and the old floor (50) both follow the new
+        # default; a number that was chosen stays, and so does a pause that was
+        for click, wait, expected in ((80, 500, (0, 0)),
+                                      (50, 500, (0, 0)),
+                                      (120, 900, (120, 900)),
+                                      (50, 300, (0, 300))):
             with self.subTest(click=click, wait=wait):
                 skin = self.load_skin({"paint_point": [1, 2],
-                                       "click_interval_ms": click,
-                                       "stack_wait_ms": wait})
-                self.assertEqual((skin.click_interval_ms, skin.stack_wait_ms), expected)
+                                      "click_interval_ms": click,
+                                      "stack_wait_ms": wait})
+                self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms),
+                                 expected)
+        # a file written after the change is never touched again: 80 is now a
+        # choice, not the default it used to be
+        skin = self.load_skin({"paint_point": [1, 2], "click_interval_ms": 80,
+                               "stack_pause_ms": 0})
+        self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms), (80, 0))
 
     def test_bad_sample_is_discarded_as_a_whole(self):
         for invalid in (None, [], sample((0, 0, 0)), sample((True, 0, 0)),

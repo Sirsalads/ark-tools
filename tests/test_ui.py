@@ -851,7 +851,7 @@ win.sw_skin.switch.setChecked(True)
 win.ed_skin_activate.setText("f4")
 win.cb_skin_mode.setCurrentIndex(0)         # press to start and stop
 win.sp_skin_interval.setValue(80)
-win.sp_skin_wait.setValue(500)
+win.sp_skin_pause.setValue(500)
 win.sp_latency.setValue(0)
 win._pull()
 assert win._hold_watch.isActive(), "captured paint points did not arm the watcher"
@@ -861,7 +861,7 @@ paint_config = Config.load(sandbox).skin_overcap
 assert paint_config.paint_point == list(paint_point)
 assert paint_config.dye_point == list(dye_point)
 assert paint_config.dye_sample == dye_sample
-assert paint_config.click_interval_ms == 80 and paint_config.stack_wait_ms == 500
+assert paint_config.click_interval_ms == 80 and paint_config.stack_pause_ms == 500
 for removed in ("cb_skin_key", "sp_skin_stops", "sp_skin_dwell", "lbl_skin_area"):
     assert not hasattr(win, removed), f"old skin control survived: {removed}"
 
@@ -883,12 +883,16 @@ start_painting()
 assert clicks == [], "starting painted before confirming the dye was present"
 win._sweep_step()
 assert clicks == [dye_point], clicks
-assert win._sweep_timer.interval() >= win.cfg.skin_overcap.stack_wait_ms
+# selecting goes straight back to painting: the next tick is a paint click,
+# not a wait — the old half-second stand here is what got complained about
+assert win._sweep_timer.interval() == win.cfg.skin_overcap.click_interval_ms
 for _ in range(100):
     win._sweep_step()
 assert clicks == [dye_point] + [paint_point] * 100, \
     "one stack must receive exactly 100 paint clicks before changing stacks"
 assert win._skin_total_clicks == 100
+# and after the 100th click the only pause of the cycle, the one that was set
+assert win._sweep_timer.interval() == win.cfg.skin_overcap.stack_pause_ms
 win._sweep_step()
 assert clicks[-1] == dye_point and clicks.count(dye_point) == 2
 win._sweep_step()
@@ -947,7 +951,7 @@ start_painting()
 for _ in range(2):
     win._sweep_step()
     assert win._sweep_timer.isActive(), "one transient empty frame stopped painting"
-    assert win._sweep_timer.interval() >= win.cfg.skin_overcap.stack_wait_ms
+    assert win._sweep_timer.interval() >= win.cfg.skin_overcap.stack_pause_ms
 assert not clicks, "an empty slot was selected"
 # Seeing a dye again resets the empty streak and allows that stack to paint.
 w_module.screen_samples = lambda _points: dye_sample
@@ -970,6 +974,54 @@ assert not win._sweep_timer.isActive() and not clicks, \
     "an unreadable screen was treated as permission to click"
 w_module.screen_samples = lambda _points: dye_sample
 print("OK  empty frames are retried with a wait; an unreadable screen stops")
+
+# ------------------------- 23c2) the pace: bursts at zero, one a tick above
+from arkmacro.ui.main_window import (MISS_RETRY_MS, PAINT_BURST_MS,  # noqa: E402
+                                     PAINT_HOLD_MAX_S, PAINT_HOLD_MIN_S)
+holds: list[float] = []
+w_module.click_at = lambda x, y, *_a, hold=0.0, settle=0.0, **_k: (
+    clicks.append((x, y)), holds.append((hold, settle)))
+win.sp_skin_interval.setValue(0)
+win.sp_skin_pause.setValue(0)
+win._pull()
+clicks.clear(); holds.clear()
+start_painting()
+win._sweep_step()                            # select
+assert clicks == [dye_point]
+assert win._sweep_timer.interval() == 0, "selecting did not go straight on"
+win._sweep_step()                            # one paint tick
+sent = len(clicks) - 1
+assert 2 <= sent <= 100, f"a zero-gap tick sent {sent} clicks"
+assert all(h == (PAINT_HOLD_MIN_S, 0) for h in holds[1:]), holds[1:]
+while win._skin_phase == "paint":
+    win._sweep_step()
+assert clicks.count(paint_point) == 100, "a burst ran past the stack"
+assert win._sweep_timer.interval() == 0, "a pause of 0 was not honoured"
+# an empty reading is still spaced out, whatever the pause says
+w_module.screen_samples = lambda _points: empty_sample
+win._sweep_step()
+assert win._sweep_timer.interval() >= MISS_RETRY_MS, win._sweep_timer.interval()
+w_module.screen_samples = lambda _points: dye_sample
+win._stop_sweep()
+
+# above the burst budget the timer keeps the gap: one click a tick, held longer
+for gap, hold in ((30, 0.01), (2000, PAINT_HOLD_MAX_S)):
+    win.sp_skin_interval.setValue(gap)
+    win._pull()
+    clicks.clear(); holds.clear()
+    start_painting()
+    win._sweep_step()                        # select
+    win._sweep_step()                        # paint
+    assert clicks.count(paint_point) == 1, (gap, clicks)
+    assert holds[-1] == (hold, 0), (gap, holds[-1])
+    assert win._sweep_timer.interval() == gap
+    win._stop_sweep()
+assert PAINT_BURST_MS < 30
+win.sp_skin_interval.setValue(80)
+win.sp_skin_pause.setValue(500)
+win._pull()
+w_module.click_at = lambda x, y, *_args, **_kwargs: clicks.append((x, y))
+print("OK  zero gap sends bursts, a set gap is one click a tick, held longer")
 
 # ------------------------- 23d) focus, panic and hold release stop before clicking
 for leave in ("focus", "panic", "close", "farm", "picker"):

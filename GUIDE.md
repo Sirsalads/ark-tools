@@ -390,9 +390,13 @@ match that reference. Partial stacks such as **x97** work too; the macro sends
 100 attempts before selecting again. It does **not** read the quantity with
 OCR, so its counter is click attempts, not a confirmed total of dyes consumed.
 
-Start with **80 ms between clicks** and **500 ms for the stack wait**. Increase
-them if the game misses clicks or the list updates slowly. GeForce NOW's
-configured stream latency is added to these waits.
+Out of the box it clicks **as fast as it can** (time between clicks **0**) and
+goes from one stack to the next **without pausing**: 100 clicks, read the
+slot, select, keep clicking. The game will not take a few hundred clicks a
+second and does not need to — clicks it drops cost nothing, the stack is just
+selected again. Raise **Time between clicks** only if the game visibly misses
+clicks, and **Pause before the next stack** only if the list updates slowly.
+GeForce NOW's configured stream latency is added to the pause.
 
 Press **`F4` again to stop**, or **`F8` for emergency stop**. It also stops if
 ARK loses focus, the screen cannot be read, you disable it or close the app.

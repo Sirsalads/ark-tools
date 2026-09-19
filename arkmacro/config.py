@@ -137,8 +137,15 @@ class SkinOvercap:
     # A small patch at the centre of the dye icon lets the macro stop when the
     # last stack disappears instead of clicking the empty list indefinitely.
     dye_sample: list[list[int]] = field(default_factory=list)
-    click_interval_ms: int = 80
-    stack_wait_ms: int = 500
+    # gap between paint clicks. 0 is as fast as clicks can be sent — hundreds a
+    # second, more than the game takes, and that is fine: a click the game
+    # drops costs nothing, the stack is simply selected again. Raise it only
+    # if the game visibly misses clicks
+    click_interval_ms: int = 0
+    # after the 100 clicks, before the first slot is read and the next stack
+    # selected. Selecting goes straight back to painting either way; this is
+    # the only pause in the cycle, and 0 means none
+    stack_pause_ms: int = 0
 
 
 @dataclass
@@ -296,6 +303,16 @@ def _migrate(cfg: "Config", raw: dict) -> None:
         cfg.skin_overcap.dye_point = [0, 0]
         cfg.skin_overcap.points_resolution = [0, 0]
         cfg.skin_overcap.dye_sample = []
+    if isinstance(skin, dict) and "stack_pause_ms" not in skin:
+        # Painting used to be paced at 80 ms a click with a 500 ms wait on
+        # either side of every stack change, and 50 ms was as low as the field
+        # went. A file still on the default, or on that floor — which is what
+        # someone chasing speed ended up on — follows the new default, which is
+        # as fast as it goes. A number that was actually chosen stays.
+        if skin.get("click_interval_ms", 80) in (50, 80):
+            cfg.skin_overcap.click_interval_ms = 0
+        wait = skin.get("stack_wait_ms", 500)
+        cfg.skin_overcap.stack_pause_ms = 0 if wait == 500 else wait
 
     legacy = drop.get("keywords")
     if legacy and "templates" not in drop:
@@ -392,8 +409,8 @@ def _sanitize(cfg: "Config") -> None:
     skin.paint_point = _point(skin.paint_point)
     skin.dye_point = _point(skin.dye_point)
     skin.points_resolution = _point(skin.points_resolution)
-    skin.click_interval_ms = _count(skin.click_interval_ms, 80, 50, 2000)
-    skin.stack_wait_ms = _count(skin.stack_wait_ms, 500, 100, 5000)
+    skin.click_interval_ms = _count(skin.click_interval_ms, 0, 0, 2000)
+    skin.stack_pause_ms = _count(skin.stack_pause_ms, 0, 0, 5000)
     skin.dye_sample = ([list(colour) for colour in skin.dye_sample]
                        if valid_sample(skin.dye_sample) else [])
     skin.activate_key = str(skin.activate_key).strip().lower()
