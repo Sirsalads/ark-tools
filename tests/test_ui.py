@@ -698,6 +698,7 @@ assert taps == [], f"pressed the key while the player was holding it: {taps}"
 # key up: it stops within one slot and puts the pointer back
 held["down"] = False
 win._sweep_step()
+win._watch_hold_key()                       # the key watcher sees the release too
 assert not win._sweep_timer.isActive(), "kept sweeping after the key came up"
 assert moves[-1] == (7, 9), f"the cursor was left on a slot: {moves[-1]}"
 print("OK  hold-to-drop sweeps while the drop key is held, and loops")
@@ -825,112 +826,249 @@ assert not win._hold_watch.isActive(), "disabling did not stop the watcher"
 held["down"] = False
 print("OK  hold-to-drop refuses while farming, unfocused, picking or misbound")
 
-# ------------------------------------------------- 23) skin overcap
-# Two different keys, and the distinction is the feature: the activation key is
-# yours and only tells the app to start, and the chord is the game's — held by
-# the macro, not by you. Pressing the chord to start a macro that holds the
-# chord would be a circle.
+# ------------------------------------------------- 23) skin overcap painting
+# The input layer is entirely recorded: these tests never click or press keys
+# outside the offscreen Qt window.
 moves.clear()
 taps.clear()
 downs: list[int] = []
 ups: list[int] = []
+clicks: list[tuple[int, int]] = []
 w_module.key_down = lambda vk: downs.append(vk)
 w_module.key_up = lambda vk: ups.append(vk)
+w_module.click_at = lambda x, y, *_args, **_kwargs: clicks.append((x, y))
 activate = {"down": False}
 w_module.key_is_down = lambda vk: activate["down"] and vk == 0x73    # F4
-win.cfg.skin_overcap.area = [100, 900, 600, 80]
-win.cfg.skin_overcap.area_resolution = list(w_module.screen_size())
+paint_point, dye_point = (160, 320), (190, 520)
+dye_sample = [[220, 25, 20] for _ in range(25)]
+empty_sample = [[5, 55, 80] for _ in range(25)]
+w_module.screen_samples = lambda _points: dye_sample
+win.cfg.skin_overcap.paint_point = list(paint_point)
+win.cfg.skin_overcap.dye_point = list(dye_point)
+win.cfg.skin_overcap.points_resolution = list(w_module.screen_size())
+win.cfg.skin_overcap.dye_sample = dye_sample
 win.sw_skin.switch.setChecked(True)
 win.ed_skin_activate.setText("f4")
 win.cb_skin_mode.setCurrentIndex(0)         # press to start and stop
-win.cb_skin_key.setCurrentText("2")
-win.sp_skin_stops.setValue(10)
-win.sp_skin_dwell.setValue(5)
+win.sp_skin_interval.setValue(80)
+win.sp_skin_wait.setValue(500)
+win.sp_latency.setValue(0)
 win._pull()
-assert win._hold_watch.isActive(), "a ready strip did not arm the watcher"
-assert "18 a full lap" in win.lbl_skin_area.text(), win.lbl_skin_area.text()
-assert "F4" in win.skin_note.text() and "2" in win.skin_note.text()
+assert win._hold_watch.isActive(), "captured paint points did not arm the watcher"
+assert "F4" in win.skin_note.text(), win.skin_note.text()
+win._save()
+paint_config = Config.load(sandbox).skin_overcap
+assert paint_config.paint_point == list(paint_point)
+assert paint_config.dye_point == list(dye_point)
+assert paint_config.dye_sample == dye_sample
+assert paint_config.click_interval_ms == 80 and paint_config.stack_wait_ms == 500
+for removed in ("cb_skin_key", "sp_skin_stops", "sp_skin_dwell", "lbl_skin_area"):
+    assert not hasattr(win, removed), f"old skin control survived: {removed}"
 
-# the press starts it, and the macro takes Shift + the slot down itself
-activate["down"] = True
-win._watch_skin_key()
-assert win._sweep_timer.isActive(), "the activation key did not start it"
-assert downs == [0x10, 0x32], f"the macro did not hold Shift+2: {downs}"
-assert ups == [], "it let go of the chord straight away"
 
-# it keeps running with the activation key released — that is the toggle
-activate["down"] = False
-for _ in range(17):
-    win._watch_skin_key()
-    win._sweep_step()
-assert win._sweep_timer.isActive(), "letting go of the activation key stopped it"
-assert len(moves) == 18, f"{len(moves)} moves for a full lap"
-assert all(y == 940 for _x, y in moves), "it left the middle of the strip"
-assert moves[9][0] == max(x for x, _y in moves), "it never reached the far end"
-assert moves[-1][0] < moves[9][0], "it did not come back"
-
-# the next press stops it, and the chord comes back up in reverse order
-activate["down"] = True
-win._watch_skin_key()
-assert not win._sweep_timer.isActive(), "the second press did not stop it"
-assert ups == [0x32, 0x10], f"the chord was not released cleanly: {ups}"
-assert moves[-1] == (7, 9), f"the cursor was left on the strip: {moves[-1]}"
-print("OK  skin overcap holds the chord for you, and lets go on the way out")
-
-# ------------------------- 23b) the Shift must never be left down
-for leave in ("focus", "close"):
-    downs.clear()
-    ups.clear()
-    # the watcher reads the key's edge, so it has to see the release first
+def start_painting():
+    """Give the toggle watcher a complete release/press edge."""
     activate["down"] = False
     win._watch_skin_key()
     activate["down"] = True
     win._watch_skin_key()
     activate["down"] = False
-    assert win._chord_held, "the macro is not holding the chord"
+    win._watch_skin_key()
+    assert win._sweep_timer.isActive() and win._sweep_kind == "skin"
+
+
+# Start only positions the cursor. A screen check and first-slot selection
+# precede painting, including when the player's first stack is already partial.
+start_painting()
+assert clicks == [], "starting painted before confirming the dye was present"
+win._sweep_step()
+assert clicks == [dye_point], clicks
+assert win._sweep_timer.interval() >= win.cfg.skin_overcap.stack_wait_ms
+for _ in range(100):
+    win._sweep_step()
+assert clicks == [dye_point] + [paint_point] * 100, \
+    "one stack must receive exactly 100 paint clicks before changing stacks"
+assert win._skin_total_clicks == 100
+win._sweep_step()
+assert clicks[-1] == dye_point and clicks.count(dye_point) == 2
+win._sweep_step()
+assert clicks[-1] == paint_point
+assert win._sweep_timer.interval() >= win.cfg.skin_overcap.click_interval_ms
+assert not taps and not downs and not ups, "painting sent keyboard input"
+
+# Toggle presses are edges, not a key held over several watcher ticks.
+activate["down"] = True
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "the second press did not stop painting"
+assert moves[-1] == (7, 9), "stopping did not restore the cursor"
+print("OK  skin paints 100 times, selects the same dye slot, and sends no keys")
+
+# ------------------------- 23b) consume an inventory, including partial stacks
+# Removing a depleted stack moves the next one to the same coordinate. Extra
+# attempts after a partial stack empties are harmless, but the next stack must
+# be selected again before any of its dye can be consumed.
+remaining = [100, 100, 37]
+inventory = {"selected": False, "used": 0}
+clicks.clear()
+
+
+def paint_inventory(x, y, *_args, **_kwargs):
+    point = (x, y)
+    clicks.append(point)
+    if point == dye_point:
+        inventory["selected"] = bool(remaining)
+    elif point == paint_point and inventory["selected"] and remaining:
+        remaining[0] -= 1
+        inventory["used"] += 1
+        if remaining[0] == 0:
+            remaining.pop(0)
+            inventory["selected"] = False
+
+
+w_module.click_at = paint_inventory
+w_module.screen_samples = lambda _points: dye_sample if remaining else empty_sample
+start_painting()
+for _ in range(400):
+    if not win._sweep_timer.isActive():
+        break
+    win._sweep_step()
+assert not win._sweep_timer.isActive(), "empty dye inventory did not stop painting"
+assert not remaining and inventory["used"] == 237, inventory
+assert clicks == ([dye_point] + [paint_point] * 100) * 3, clicks
+assert win._skin_total_clicks == 300 and win._skin_stacks == 3
+assert not taps and not downs and not ups, "the old Shift/hotbar chord survived"
+print("OK  two full stacks and a partial stack are consumed and then stop")
+
+# ------------------------- 23c) an empty reading must settle, a failed read stops
+w_module.click_at = lambda x, y, *_args, **_kwargs: clicks.append((x, y))
+clicks.clear()
+w_module.screen_samples = lambda _points: empty_sample
+start_painting()
+for _ in range(2):
+    win._sweep_step()
+    assert win._sweep_timer.isActive(), "one transient empty frame stopped painting"
+    assert win._sweep_timer.interval() >= win.cfg.skin_overcap.stack_wait_ms
+assert not clicks, "an empty slot was selected"
+# Seeing a dye again resets the empty streak and allows that stack to paint.
+w_module.screen_samples = lambda _points: dye_sample
+win._sweep_step()
+assert clicks == [dye_point]
+for _ in range(100):
+    win._sweep_step()
+w_module.screen_samples = lambda _points: empty_sample
+for _ in range(2):
+    win._sweep_step()
+    assert win._sweep_timer.isActive(), "an old empty streak survived a live stack"
+win._sweep_step()
+assert not win._sweep_timer.isActive(), "three settled empty frames did not stop"
+
+clicks.clear()
+w_module.screen_samples = lambda _points: None
+start_painting()
+win._sweep_step()
+assert not win._sweep_timer.isActive() and not clicks, \
+    "an unreadable screen was treated as permission to click"
+w_module.screen_samples = lambda _points: dye_sample
+print("OK  empty frames are retried with a wait; an unreadable screen stops")
+
+# ------------------------- 23d) focus, panic and hold release stop before clicking
+for leave in ("focus", "panic", "close", "farm", "picker"):
+    clicks.clear()
+    start_painting()
     if leave == "focus":
         w_module.is_foreground = lambda _h: False
         win._sweep_step()
         w_module.is_foreground = lambda _h: True
+    elif leave == "panic":
+        win._on_hotkey("panic")
+    elif leave == "farm":
+        win.engine = Farming()
+        win._sweep_step()
+        win.engine = None
+    elif leave == "picker":
+        win._picking = True
+        win._sweep_step()
+        win._picking = False
     else:
         win._stop_sweep()
-    assert not win._chord_held, f"the chord survived losing {leave}"
-    assert ups == [0x32, 0x10], f"Shift was left down after {leave}: {ups}"
-print("OK  the held chord is released by every route out of a sweep")
+    assert not win._sweep_timer.isActive(), f"painting survived {leave}"
+    assert not clicks, f"painting sent input after {leave}: {clicks}"
 
-# ------------------------- 23c) the two keys have to be different
-win.ed_skin_activate.setText("2")           # the slot the macro holds
-win._pull()
-assert "different one" in win.skin_note.text(), win.skin_note.text()
-win.ed_skin_activate.setText("shift")
-win._pull()
-assert "different one" in win.skin_note.text(), win.skin_note.text()
-downs.clear()
-win._watch_skin_key()
-assert not win._sweep_timer.isActive() and not downs, "ran on a circular bind"
-assert not win.sw_skin.switch.isChecked(), "a circular bind was left armed"
-win.ed_skin_activate.setText("f4")
-print("OK  the activation key cannot be part of the chord the macro holds")
-
-# ------------------------- 23d) the two sweeps never share the cursor
-win.sw_skin.switch.setChecked(True)
+win.cb_skin_mode.setCurrentIndex(1)
 win._pull()
 activate["down"] = False
-win._watch_skin_key()                       # let the watcher see the release
+win._watch_skin_key()
 activate["down"] = True
 win._watch_skin_key()
-assert win._sweep_kind == "skin", "the strip did not start"
-# hold-to-drop is armed too; it must not take the cursor from a running strip
-win._watch_hold_key()
-assert win._sweep_kind == "skin", "hold-to-drop hijacked a running strip"
-win._stop_sweep()
-assert win._sweep_kind == "", "the kind outlived the sweep"
+assert win._sweep_timer.isActive()
+activate["down"] = False
+win._sweep_step()
+assert not win._sweep_timer.isActive() and not clicks, "hold mode ignored release"
+# An empty inventory finishes once even if the activation key stays held.
+activate["down"] = True
+win._watch_skin_key()
+w_module.screen_samples = lambda _points: empty_sample
+for _ in range(3):
+    win._sweep_step()
+assert not win._sweep_timer.isActive()
+for _ in range(5):
+    win._watch_skin_key()
+    assert not win._sweep_timer.isActive(), "held activation restarted a finished run"
+activate["down"] = False
+win._watch_skin_key()
+w_module.screen_samples = lambda _points: dye_sample
+win.cb_skin_mode.setCurrentIndex(0)
+win._pull()
+print("OK  skin stops on focus loss, F8, close, farming, picking and key release")
 
+# ------------------------- 23e) invalid setup never sends input
+for invalid in ("key", "hotkey", "sample", "point"):
+    clicks.clear()
+    if invalid == "key":
+        win.ed_skin_activate.setText("not-a-key")
+    elif invalid == "hotkey":
+        win.ed_skin_activate.setText("f8")
+    elif invalid == "sample":
+        win.cfg.skin_overcap.dye_sample = []
+    else:
+        win.cfg.skin_overcap.paint_point = [0, 0]
+    win.sw_skin.switch.setChecked(True)
+    win._pull()
+    activate["down"] = True
+    win._watch_skin_key()
+    assert not win._sweep_timer.isActive() and not clicks, invalid
+    win.ed_skin_activate.setText("f4")
+    win.cfg.skin_overcap.dye_sample = dye_sample
+    win.cfg.skin_overcap.paint_point = list(paint_point)
+    activate["down"] = False
+    win._watch_skin_key()
+win.sw_skin.switch.setChecked(True)
+win._pull()
+
+# ------------------------- 23f) drop and painting never share the cursor
+win.sw_hold.switch.setChecked(True)
+win.cb_hold_mode.setCurrentIndex(0)
+win._pull()
+start_painting()
+w_module.key_is_down = lambda _vk: True
+win._watch_hold_key()
+assert win._sweep_kind == "skin", "hold-to-drop hijacked painting"
+win._stop_sweep()
+w_module.key_is_down = lambda _vk: False
+win._watch_hold_key()
+w_module.key_is_down = lambda _vk: True
+win._watch_hold_key()
+assert win._sweep_kind == "drop", "drop could not start after painting stopped"
+win._watch_skin_key()
+assert win._sweep_kind == "drop", "painting hijacked hold-to-drop"
+win._stop_sweep()
+assert win._sweep_kind == "", "the kind outlived the macro"
+win.sw_hold.switch.setChecked(False)
 win.sw_skin.switch.setChecked(False)
 win._pull()
 activate["down"] = False
 w_module.key_is_down = lambda _vk: held["down"]
-print("OK  hold-to-drop and skin overcap never run at the same time")
+print("OK  skin refuses an invalid setup and never overlaps hold-to-drop")
 
 # ------------------------------------------------- 24) the area picker
 from arkmacro.ui.picker import AreaPicker  # noqa: E402
@@ -971,11 +1109,6 @@ win._pick_area_kind = "drop"
 win._on_area_picked(300, 150, 300, 300)
 assert win.cfg.hold_drop.area == [300, 150, 300, 300], win.cfg.hold_drop.area
 assert win.cfg.hold_drop.area_resolution == list(w_module.screen_size())
-win._pick_area_kind = "skin"
-win._on_area_picked(100, 900, 600, 80)
-assert win.cfg.skin_overcap.area == [100, 900, 600, 80]
-assert win.cfg.hold_drop.area == [300, 150, 300, 300], "the two areas collided"
-win._pick_area_kind = "drop"
 
 # the geometry line is logged every pick, and a capture that does not match the
 # screen it came from is called out — that is the shape of the bug this had
@@ -997,14 +1130,15 @@ print("OK  a picked area reaches the right macro, and the scaling is logged")
 # selection off target.
 win.cfg.hold_drop.area = [100, 100, 400, 300]        # inside 1920x1080
 win.cfg.hold_drop.area_resolution = [1920, 1080]
-win.cfg.skin_overcap.area = [2100, 900, 600, 80]     # on a second monitor
-win.cfg.skin_overcap.area_resolution = [1920, 1080]
 w_module.screen_size = lambda: (2560, 1440)
 win._maybe_rescale_area()
 assert win.cfg.hold_drop.area_resolution == [2560, 1440], "the primary one "\
     "was not rescaled"
 assert win.cfg.hold_drop.area != [100, 100, 400, 300], "it did not move"
-assert win.cfg.skin_overcap.area == [2100, 900, 600, 80], \
+win.cfg.hold_drop.area = [2100, 900, 600, 80]       # on a second monitor
+win.cfg.hold_drop.area_resolution = [1920, 1080]
+win._maybe_rescale_area()
+assert win.cfg.hold_drop.area == [2100, 900, 600, 80], \
     "an off-primary selection was rescaled anyway"
 w_module.screen_size = lambda: (1920, 1080)
 print("OK  only areas that sat on the primary screen get rescaled")

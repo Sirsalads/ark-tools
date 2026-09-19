@@ -209,7 +209,7 @@ class AreaPicker(QWidget):
 
     def __init__(self, shot: QPixmap, area: QRect, columns: int, rows: int,
                  origin: tuple[int, int] = (0, 0), label: str = "",
-                 title: str = "", strip: bool = False,
+                 title: str = "",
                  ratio: float = 1.0, grid: bool = True) -> None:
         super().__init__(None)
         self._shot = shot
@@ -227,8 +227,6 @@ class AreaPicker(QWidget):
         self._label = label or f"HOLD-TO-DROP AREA · {self._columns} X "\
                                f"{self._rows}"
         self._title = title or "Drag a box over the slots to empty"
-        # a strip is swept end to end and back, not covered row by row
-        self._strip = strip
         # not every box is a path. The stop sign is a box the app will *look*
         # at, so drawing the dots a cursor would visit and calling them stops
         # would be describing something that never happens.
@@ -340,8 +338,7 @@ class AreaPicker(QWidget):
     def _paint_grid(self, painter: QPainter, box: QRect) -> None:
         """The sweep path itself: the dots it visits, in the order it visits."""
         area = [box.x(), box.y(), box.width(), box.height()]
-        path = (sweep.pingpong(area, self._columns) if self._strip
-                else sweep.serpentine(area, self._columns, self._rows))
+        path = sweep.serpentine(area, self._columns, self._rows)
         if not path:
             return
         painter.setPen(QPen(QColor(T.ACCENT), 1, Qt.DashLine))

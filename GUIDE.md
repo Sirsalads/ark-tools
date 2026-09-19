@@ -17,8 +17,8 @@ ARK makes you do three tedious things over and over:
 3. **Eat and drink** while you do it, or you die next to a full inventory.
 
 A.N.S Tools does all three, on its own, while you watch a video on the other
-monitor. It also has two hand-tools for the jobs that are not a loop: emptying a
-container fast, and running the hotbar for skins.
+monitor. It also has two tools for other jobs: emptying a container fast, and
+using every stack of a chosen dye on the Apply Dye screen.
 
 **It is three separate macros. They do not depend on each other, and you can use
 one and ignore the others.**
@@ -27,7 +27,7 @@ one and ignore the others.**
 |---|---|---|
 | **Farm** | Swings for you, and every so often opens the inventory and throws out what you listed | Long harvesting sessions |
 | **Drop** | Sweeps the cursor across a block of slots, dropping every stack | Emptying a forge or a bag by hand, fast |
-| **Overcap skin** | Runs the cursor along your hotbar while holding Shift + a slot | Applying across the bar in one go |
+| **Overcap skin** | Paints 100 times, selects the next dye stack, and repeats | Using all stacks of a chosen dye |
 
 Everything runs by moving your real mouse and pressing real keys. **ARK has to be
 the window in front.** The app is not reading the game's memory and not injecting
@@ -368,17 +368,35 @@ inventory moves items around instead of dropping them. Stop the farm first.
 
 ## Step 5 — The Overcap skin macro (optional)
 
-Same shape. **Overcap skin → Freeze screen and select the strip**, drag a box
-over your hotbar. It is one row, so only the middle is swept — the height just has
-to cover the slots.
+Open **Apply Dye** in ARK and filter the dye list to the color you want to use.
+As each stack disappears, the next one must move into the same first slot.
 
-Press **`F4`** and the macro **holds Shift + slot 2 for you** while the cursor
-runs the strip end to end and back. Press `F4` again to stop.
+On **Overcap skin**, capture two points from the frozen screen:
 
-The chord goes down when the sweep starts and comes back up when it ends — by
-every route out, including losing focus and closing the app. A Shift left held
-down would follow you into everything else you type, so that release is not
-conditional on anything.
+1. The **upper color region** you want to click repeatedly.
+2. The **colored center of the first dye icon** in the list below. Click the
+   dye itself, away from the quantity text and slot border; this also captures
+   its color for the check that tells when it is gone.
+
+Enable the macro, return to ARK, and press **`F4`**. It selects the first dye,
+clicks the upper point **100 times**, then selects the next stack at the same
+lower point and repeats. You do not need to count your stacks or select them
+one by one. The macro finishes when the first slot has no matching dye for
+**three consecutive readings**.
+
+Keep the list filtered to the dye you captured: a different color will not
+match that reference. Partial stacks such as **x97** work too; the macro sends
+100 attempts before selecting again. It does **not** read the quantity with
+OCR, so its counter is click attempts, not a confirmed total of dyes consumed.
+
+Start with **80 ms between clicks** and **500 ms for the stack wait**. Increase
+them if the game misses clicks or the list updates slowly. GeForce NOW's
+configured stream latency is added to these waits.
+
+Press **`F4` again to stop**, or **`F8` for emergency stop**. It also stops if
+ARK loses focus, the screen cannot be read, you disable it or close the app.
+Stop Farm and Drop before starting it. Capture again after changing the dye,
+HUD, game window position or resolution.
 
 ---
 
@@ -394,11 +412,11 @@ them. All of them are rebindable.
 | `F8` | Emergency stop | works anywhere |
 | `F9` | Freeze the screen and pick | works anywhere |
 | `F3` | Sweep a block of slots | only with ARK in front |
-| `F4` | Run the hotbar strip | only with ARK in front |
+| `F4` | Start / stop painting through dye stacks | only with ARK in front |
 
 The four global ones are registered with Windows, so they fire even while ARK has
-focus and **the game never sees them**. The two macro keys are the opposite: they
-are only watched, never swallowed, because ARK has to receive them.
+focus and **the game never sees them**. The Drop and Overcap skin activation
+keys are only watched, so they also reach ARK. Choose keys with no game binding.
 
 ---
 
@@ -420,8 +438,9 @@ and keyboard to the server, so everything works — just one round trip later. T
 app adds a latency allowance to every wait in the drop routine, retargets the
 window, and measures the video inside the window instead of the window itself.
 
-**Recapture your points after switching**, and raise the per-slot times on the
-Drop and Overcap macros: each stop costs a round trip up there.
+**Recapture your points after switching**, and raise Drop's per-slot time if it
+misses slots. Overcap skin adds the configured stream latency to its click and
+stack waits; increase those timings if clicks or list updates still fall behind.
 
 Background delivery is greyed out on this profile and no setting brings it back —
 the client only forwards *real* input, so a message posted to its window never
@@ -449,9 +468,10 @@ you would rather press the button yourself.
 
 Worth knowing before you trust it with a session:
 
-- **It cannot see your inventory.** It reads a few pixels to answer two
-  questions — is the panel still open, did the keyword reach the search box — and
-  nothing else. It does not know what is in your bag.
+- **It does not read your inventory contents or quantities.** Its pixel checks
+  recognize the panel, text appearing in the search box, a captured stop icon,
+  or the chosen dye in its first slot. They do not identify everything in your
+  bag or verify how many dyes each click consumed.
 - **It cannot tell `met` from `metal`.** The safety check confirms *something*
   was typed, not what.
 - **It cannot press an empty slot.** Auto-feed will happily press a slot with no

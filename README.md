@@ -155,7 +155,7 @@ keyword that gets typed into the filter:
 
 ## Display scaling
 
-Every coordinate the app stores — the two farm points, both picked areas — is a
+Every coordinate the app stores — farm and paint points, picked areas — is a
 **physical screen pixel**, and so is every cursor move and pixel read it makes.
 Windows reports those directly only to a **DPI-aware** process, so the app claims
 per-monitor awareness on startup rather than inheriting it from the toolkit.
@@ -262,8 +262,9 @@ including the two that belong to the Drop and Overcap skin macros, which the
 dashboard also names so "what does F3 do" never needs a hunt.
 
 The four above are the app's own: they are registered as global hotkeys, so they
-fire anywhere and **ARK never sees them**. The two macro keys are the opposite —
-they are only watched, never swallowed, because the game has to receive them.
+fire anywhere and **ARK never sees them**. The Drop and Overcap skin activation
+keys are only watched, so they also reach ARK. Choose keys the game has nothing
+bound to.
 
 ## One drop pass, step by step
 
@@ -466,8 +467,8 @@ The key is only ever **watched**, with `GetAsyncKeyState`, never registered:
 
 ### Three ways to run it
 
-Two keys, same split as skin overcap: **Start it with** is yours and only tells
-the app to go, and the **Drop key** is the game's instruction.
+Two keys: **Start it with** is yours and tells the app to go, and the **Drop
+key** is the game's instruction.
 
 | How it runs | What you do | Who sends the drop key |
 |---|---|---|
@@ -532,61 +533,54 @@ rescaled if your screen resolution changes — verify it after, same as the poin
 
 ## Overcap skin
 
-**Overcap skin.** Press your key and the macro holds **Shift + a hotbar
-slot** for you while the cursor runs the strip you selected end to end and back,
-in a loop. Your hands stay free.
+**Overcap skin** uses the **Apply Dye** screen to paint through every available
+stack of the chosen dye. It clicks the upper color region **100 times**, selects
+the next stack from the first dye slot below, and repeats until that slot no
+longer contains the captured dye.
 
-### Two keys, and they are not the same key
+### Capture the two paint points
 
-This is the part worth being precise about, because conflating them makes the
-feature nonsense:
+1. Open **Apply Dye** in ARK, with the region you want to paint visible.
+2. **Filter the dye list to the color you want to use.** The next stack must
+   move into the same first slot when the previous one is used up.
+3. On **Overcap skin**, capture the upper color region you want clicked, then
+   the **colored center of the first dye icon** below. Avoid the stack count,
+   slot border and empty background. The frozen capture also supplies the color
+   reference used to recognize the dye.
+4. Enable the macro, return to ARK, and press **`F4`** to start. Press `F4`
+   again to stop, or **`F8`** for the emergency stop.
 
-| | What it is | Who presses it |
-|---|---|---|
-| **Start it with** (`f4`) | **Yours.** It only tells the app to start or stop. The game has nothing to do with it | You |
-| **Macro holds Shift +** (`2`) | **The game's.** The instruction ARK acts on | The macro |
+The macro selects the first dye stack at the start. Each cycle then sends 100
+clicks to the upper point, waits for the list to settle, checks the first slot,
+and selects it again if dye remains. There is no number of stacks to enter:
+stacks farther down the list move into the same slot as earlier ones disappear.
 
-Pressing the chord to start a macro whose whole job is to hold that chord would
-be a circle, so the app refuses it: set the activation key to `2` or to `shift`
-and the card says so and will not run.
+### How it decides the dye is finished
 
-Pick an activation key **ARK has nothing bound to** — it is watched, not
-swallowed, so it reaches the game as well as the app.
+The first slot has to lack the captured dye for **three consecutive readings**
+before the run finishes. The cursor stays away from the icon during those checks
+so a hover effect does not become the reference. A screen that cannot be read
+stops the run with a message; it is never counted as an empty slot.
 
-### The chord always comes back up
+This checks the icon's color, so keep the list filtered to the captured dye.
+Another color is not recognized as another stack of that dye. Capture again if
+you change the color, move the game window, change the HUD or change resolution.
 
-The macro presses Shift and the slot down when the sweep starts and releases them
-when it ends — by **every** route out: the second press, the key released in hold
-mode, ARK losing focus, the switch turned off, the app closing. A Shift left down
-would not stay in the game; it would follow you into everything else you type.
+**Partial stacks are supported.** A stack with 97 dyes still receives 100 click
+attempts before the next selection. There is no OCR of the quantity: the counter
+reports **click attempts**, not a verified number of dyes consumed. If the game
+misses clicks, increase the timings; a remaining stack will be selected again.
 
-### How it runs
+### Timing and stopping
 
-**Press to start and stop** by default, which is the point of a separate
-activation key: press once, put your hand back on the mouse, press again when
-you are done. **Hold the key** is there too if you prefer it.
-
-The strip is picked the same way, on a frozen screen, with the path drawn as you
-drag. It is one row, so only the **middle** of the box is swept: the height only
-has to cover the slots, and where you put the top and bottom edges does not
-matter beyond that.
-
-- **Stops across** (10) is how many places the cursor pauses between the ends —
-  one per hotbar slot is the usual answer. A lap is *stops out plus the way
-  back*, which the status line spells out: 10 stops each way is 18 a lap,
-  because both turning points are only visited once.
-- **Time per stop** (40 ms) is the same knob as hold-to-drop's, with the same
-  advice: lower it on an installed game, raise it on GeForce NOW.
-- It stops the moment ARK stops being the front window, whichever mode it is in.
-
-**Drop and Overcap skin never run at the same time.** There is one
-cursor, so whichever one is already sweeping keeps it until it stops.
-
-Both have the same split for the same reason: **the key you press to start a
-macro is not the key the macro is there to send.** Hold-to-drop keeps a third
-mode where the two coincide, because there the instruction is a single key your
-finger can hold; skin overcap has no such mode, because holding Shift + a slot to
-start a macro that holds Shift + a slot is a circle with no way out.
+- **Click interval** defaults to **80 ms**. Raise it if ARK misses paint clicks.
+- **Stack wait** defaults to **500 ms**, allowing selection and list updates to
+  appear before the next action. The configured **GeForce NOW stream latency**
+  is added to these waits.
+- The activation key is watched, so it also reaches ARK. Choose a key the game
+  has nothing bound to.
+- Losing focus, disabling the macro or closing the app stops painting. Farm,
+  Drop and Overcap skin cannot operate the cursor at the same time.
 
 ## Auto-feed
 
@@ -823,7 +817,7 @@ nothing, and that is the whole reason foreground works and background does not.
 | **Dashboard** | Start/stop, the counters, and every key the app answers to |
 | **Farm** | The long-running macro: swinging, the drop trigger, the drop list, the safety check, the timings, the two points, and auto-feed |
 | **Drop** | Sweep a block of slots by hand |
-| **Overcap skin** | Run the hotbar strip with a held chord |
+| **Overcap skin** | Paint 100 times per stack and select the next dye until finished |
 | **Settings** | Global hotkeys, target and delivery, anti-AFK, updates |
 | **Log** | Everything the app did this session |
 
@@ -841,6 +835,7 @@ arkmacro/config.py       config.json persistence, migrates older formats
 arkmacro/presets.py      ARK template library plus risk notes
 arkmacro/layout.py       HUD geometry model (estimate / rescale points)
 arkmacro/sweep.py        hold-to-drop path across a block of slots
+arkmacro/painting.py     dye recognition and 100-click painting cycle
 arkmacro/updater.py      self-update by fast-forwarding this clone
 arkmacro/ui/picker.py    frozen-screen pickers: one point, or an area
 arkmacro/ui/backdrop.py  gradient, glows and the brand melt
@@ -857,6 +852,7 @@ Run the tests — they never send a real click:
 
 ```bash
 python tests/test_engine.py
+python tests/test_painting.py
 python tests/test_ui.py
 python tests/test_updater.py
 python tests/test_winapi.py

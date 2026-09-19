@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 from .. import __version__
 from .. import layout as ark_layout
+from .. import painting
 from .. import stopsign
 from .. import sweep
 from .. import updater
@@ -184,6 +185,8 @@ class MainWindow(QWidget):
         self._update_worker: updater.UpdateWorker | None = None
         self._silent_check = False
         self._picking = False
+        self._pick_kind = "farm"
+        self._skin_pick_points = {}
         self._applying_points = False
         self._state = "idle"
 
@@ -227,8 +230,12 @@ class MainWindow(QWidget):
         self._sweep_hwnd: int | None = None
         self._pick_area_kind = "drop"
         self._skin_was_down = False
-        # whether the macro currently has Shift + a slot pressed down
-        self._chord_held = False
+        self._skin_phase = ""
+        self._skin_clicks_in_stack = 0
+        self._skin_total_clicks = 0
+        self._skin_stacks = 0
+        self._skin_missing = 0
+        self._skin_finished = False
         self._hold_refused = False
         # toggling acts on the press, so the level has to be remembered between
         # ticks to tell a new press from a key that is simply still down
@@ -433,8 +440,8 @@ class MainWindow(QWidget):
         for name, title, detail in (
             ("hold", "Sweep a block of slots",
              "drop everything in the area you picked, on the Drop page"),
-            ("skin", "Run the hotbar strip",
-             "the macro holds Shift + a slot for you, on the Overcap skin page"),
+            ("skin", "Use the dye stacks",
+             "100 painting clicks, then select the next dye on Overcap skin"),
         ):
             row = KeyRow("", title, detail, T.WARN)
             self.key_rows[name] = row
@@ -838,87 +845,81 @@ class MainWindow(QWidget):
         page, lay = scroll_page()
         lay.addLayout(heading(
             "Overcap skin",
-            "Press your key and the macro holds Shift + a hotbar slot for you "
-            "while the cursor runs your hotbar end to end and back, in a loop.",
-            kicker="MACRO"))
+            "Paint 100 times, select the next dye stack and repeat until "
+            "the captured dye is no longer in the first slot.", kicker="MACRO"))
         lay.addWidget(self._skin_overcap_card())
-        lay.addWidget(self._skin_strip_card())
+        lay.addWidget(self._skin_points_card())
         lay.addStretch(1)
         return page
 
-    # ------------------------------------------------------- skin overcap
     def _skin_overcap_card(self) -> Card:
-        """The keys — yours to press, the chord for the macro to hold."""
         skin = self.cfg.skin_overcap
-        card = Card("Keys and mode",
-                    "Two keys, and they are not the same key: the one you press "
-                    "belongs to the app, the chord belongs to the game and the "
-                    "macro is what holds it.", icon="keyboard")
+        card = Card("Automatic painting",
+                    "Open Apply Dye in ARK and keep the first dye slot visible. "
+                    "The next stack must move into that same slot when it runs out.",
+                    icon="keyboard")
         self.sw_skin = SwitchRow("Skin overcap enabled", skin.enabled)
         card.add(self.sw_skin)
         card.add(Divider())
-
         sgrid = FormGrid(pairs=2)
         self.ed_skin_activate = QLineEdit(skin.activate_key)
         self.ed_skin_activate.setMaxLength(10)
         self.ed_skin_activate.setFixedWidth(124)
         self.ed_skin_activate.setAlignment(Qt.AlignCenter)
         sgrid.add("Start it with", self.ed_skin_activate,
-                  "Yours, not the game's. Pick something ARK has nothing bound "
-                  "to — it reaches the game as well")
+                  "Choose an unused game key; the game also receives this key")
         self.cb_skin_mode = combo(["Press to start and stop", "Hold the key"],
                                   1 if skin.mode == "hold" else 0, width=230)
         sgrid.add("How it runs", self.cb_skin_mode)
-        self.cb_skin_key = combo(HOTBAR, HOTBAR.index(skin.key)
-                                 if skin.key in HOTBAR else 1, width=124)
-        sgrid.add("Macro holds Shift +", self.cb_skin_key,
-                  "The hotbar slot the macro presses and holds while it sweeps")
-        sgrid.skip()
+        self.sp_skin_interval = spin(50, 2000, skin.click_interval_ms, " ms", 10)
+        sgrid.add("Time between clicks", self.sp_skin_interval,
+                  "Increase this if the game misses painting clicks")
+        self.sp_skin_wait = spin(100, 5000, skin.stack_wait_ms, " ms", 50)
+        sgrid.add("Wait for each stack", self.sp_skin_wait,
+                  "Allows selection and list updates; stream latency is added")
         card.add(sgrid)
         self.skin_note = hint_label("")
         card.add(self.skin_note)
         card.add(hint_label(
-            "The chord goes down when the sweep starts and comes back up when "
-            "it ends, by every route out including losing focus and closing the "
-            "app — a Shift left down would follow you into everything else you "
-            "type."))
+            "Each cycle sends 100 clicks, including for a partially used stack. "
+            "The counter records click attempts, not confirmed dye consumption. "
+            "Your emergency-stop key (F8 by default) stops the macro."))
         return card
 
-    def _skin_strip_card(self) -> Card:
-        """The hotbar strip, and how fast the cursor runs it."""
-        skin = self.cfg.skin_overcap
-        card = Card("The strip it runs",
-                    "Drag the box over your hotbar. It is one row, so only the "
-                    "middle is swept — the height just has to cover the slots.",
-                    icon="target")
-        sgrid = FormGrid(pairs=2)
-        self.sp_skin_stops = spin(2, 40, skin.stops, "", 1)
-        sgrid.add("Stops across", self.sp_skin_stops,
-                  "How many places the cursor pauses between the two ends. One "
-                  "per hotbar slot is the usual answer")
-        self.sp_skin_dwell = spin(5, 1000, skin.dwell_ms, " ms", 5)
-        sgrid.add("Time per stop", self.sp_skin_dwell)
-        card.add(sgrid)
-
+    def _skin_points_card(self) -> Card:
+        card = Card("Two painting points",
+                    "Capture the upper colour region, then the coloured centre "
+                    "of the first dye icon below. Filter the list to that dye "
+                    "colour before starting.", icon="target")
+        self.btn_skin_points = QPushButton("  Freeze screen and pick both points")
+        self.btn_skin_points.setObjectName("primary")
+        self.btn_skin_points.setCursor(Qt.PointingHandCursor)
+        self.btn_skin_points.setIcon(icons.icon("search", "#04222B", 16))
+        self.btn_skin_points.setIconSize(QSize(16, 16))
+        self.btn_skin_points.clicked.connect(self._begin_skin_pick)
+        card.add(self.btn_skin_points)
+        self.lbl_skin_points = hint_label("")
+        card.add(self.lbl_skin_points)
         row = QHBoxLayout()
-        row.setSpacing(10)
-        self.btn_skin_area = QPushButton("  Freeze screen and select the strip")
-        self.btn_skin_area.setObjectName("primary")
-        self.btn_skin_area.setCursor(Qt.PointingHandCursor)
-        self.btn_skin_area.setIcon(icons.icon("search", "#04222B", 16))
-        self.btn_skin_area.setIconSize(QSize(16, 16))
-        self.btn_skin_area.clicked.connect(self._begin_skin_pick)
-        row.addWidget(self.btn_skin_area, 1)
+        for label, attr in (("Test painting point", "paint_point"),
+                            ("Test dye point", "dye_point")):
+            button = QPushButton(label)
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(
+                lambda _checked=False, a=attr: self._test_point(
+                    *getattr(self.cfg.skin_overcap, a)))
+            row.addWidget(button)
         card.add(row)
-
-        self.lbl_skin_area = hint_label("")
-        card.add(self.lbl_skin_area)
+        self.lbl_skin_progress = hint_label("Ready to paint")
+        card.add(self.lbl_skin_progress)
         card.add(hint_label(
-            "Same guards as the Drop macro — ARK in front, farm macro stopped — "
-            "and the two never run at once, because there is one cursor."))
+            "Three missing dye readings stop the macro. Keep ARK in front; "
+            "recapture if the dye colour, window position or resolution changes. "
+            "Farm and Drop cannot run at the same time as painting."))
         return card
 
     # ------------------------------------------------------- hold to drop
+
     def _hold_drop_card(self) -> Card:
         """The keys and the mode — who presses what."""
         hold = self.cfg.hold_drop
@@ -1437,8 +1438,8 @@ class MainWindow(QWidget):
             self.sw_hold.switch, self.ed_hold_key, self.sp_hold_cols,
             self.sp_hold_rows, self.sp_hold_dwell, self.cb_hold_mode,
             self.ed_hold_activate,
-            self.sw_skin.switch, self.cb_skin_key, self.sp_skin_stops,
-            self.sp_skin_dwell, self.ed_skin_activate, self.cb_skin_mode,
+            self.sw_skin.switch, self.sp_skin_interval, self.sp_skin_wait,
+            self.ed_skin_activate, self.cb_skin_mode,
             self.sw_stop.switch, self.sp_stop_tol, self.sp_stop_match,
             self.sp_stop_poll,
         ]
@@ -1517,9 +1518,8 @@ class MainWindow(QWidget):
         skin.enabled = self.sw_skin.switch.isChecked()
         skin.activate_key = self.ed_skin_activate.text().strip().lower() or "f4"
         skin.mode = "hold" if self.cb_skin_mode.currentIndex() == 1 else "toggle"
-        skin.key = self.cb_skin_key.currentText()
-        skin.stops = self.sp_skin_stops.value()
-        skin.dwell_ms = self.sp_skin_dwell.value()
+        skin.click_interval_ms = self.sp_skin_interval.value()
+        skin.stack_wait_ms = self.sp_skin_wait.value()
         self._sync_key_watch()
 
         feed = self.cfg.auto_feed
@@ -1684,12 +1684,14 @@ class MainWindow(QWidget):
         hold = self.cfg.hold_drop
         skin = self.cfg.skin_overcap
         drop_ready = hold.enabled and sweep.usable(hold.area)
-        skin_ready = skin.enabled and sweep.usable(skin.area)
+        skin_ready = skin.enabled and painting.ready(skin)
         if drop_ready or skin_ready:
-            vk = w.vk_from_name(hold.key)
-            # a key that is already down as this arms is not a fresh press, or
-            # switching the mode on with a finger on the key would start a sweep
-            self._hold_was_down = bool(vk is not None and w.key_is_down(vk))
+            if not self._hold_watch.isActive():
+                vk = w.vk_from_name(hold.key if hold.mode == "manual"
+                                    else hold.activate_key)
+                self._hold_was_down = bool(vk is not None and w.key_is_down(vk))
+                vk = w.vk_from_name(skin.activate_key)
+                self._skin_was_down = bool(vk is not None and w.key_is_down(vk))
             self._hold_watch.start()
         else:
             self._hold_watch.stop()
@@ -1732,29 +1734,20 @@ class MainWindow(QWidget):
         skin = self.cfg.skin_overcap
         problem = self._skin_problem()
         if problem:
-            self.skin_note.setText(
-                f"{problem[0].upper()}{problem[1:]}. Skin overcap will refuse "
-                "to run.")
+            self.skin_note.setText(f"{problem[0].upper()}{problem[1:]}. "
+                                   "Skin overcap will refuse to run.")
         else:
-            starts = ("Hold" if skin.mode == "hold" else "Press")
+            starts = "Hold" if skin.mode == "hold" else "Press"
             self.skin_note.setText(
-                f"{starts} «{skin.activate_key.upper()}» and the macro holds "
-                f"Shift+«{skin.key.upper()}» while it sweeps. Two different "
-                "keys on purpose: the one you press is the app's, the chord is "
-                "the game's.")
-        if not sweep.usable(skin.area):
-            self.lbl_skin_area.setText(
-                "No strip selected yet — skin overcap will not do anything "
-                "until you pick one on a frozen screen.")
+                f"{starts} «{skin.activate_key.upper()}» in ARK to paint in "
+                "cycles of 100 clicks, selecting the next dye automatically.")
+        if not painting.ready(skin):
+            self.lbl_skin_points.setText(
+                "Capture both points with a dye visible before starting.")
             return
-        x, y, width, height = skin.area
-        path = len(sweep.pingpong(skin.area, skin.stops))
-        pace = path * skin.dwell_ms / 1000.0
-        res = skin.area_resolution
-        where = f", captured at {res[0]}x{res[1]}" if res and all(res) else ""
-        self.lbl_skin_area.setText(
-            f"{width}x{height} px at ({x}, {y}){where} — {skin.stops} stops "
-            f"each way, {path} a full lap, about {pace:.1f}s.")
+        self.lbl_skin_points.setText(
+            f"Painting: {tuple(skin.paint_point)} · First dye: "
+            f"{tuple(skin.dye_point)} · 100 clicks per cycle")
 
     def _can_sweep(self) -> bool:
         """Whether it is safe to start a sweep right now, and say why not once."""
@@ -1839,28 +1832,18 @@ class MainWindow(QWidget):
             self._start_drop_sweep()
 
     def _skin_problem(self) -> str:
-        """Why skin overcap cannot run, or "" when it can."""
         skin = self.cfg.skin_overcap
-        if w.vk_from_name(skin.activate_key) is None:
+        vk = w.vk_from_name(skin.activate_key)
+        if vk is None:
             return f'the activation key "{skin.activate_key}" is not a key name'
-        if w.vk_from_name(skin.key) is None:
-            return f'the hotbar slot "{skin.key}" is not a key name'
-        # the whole point of two keys: pressing the chord to start a macro whose
-        # job is to hold that chord is a circle
-        if skin.activate_key in (skin.key, "shift"):
-            return ("the activation key is part of the chord the macro holds — "
-                    "pick a different one")
+        if vk in {w.vk_from_name(key) for key in vars(self.cfg.hotkeys).values()}:
+            return "the activation key is already a global hotkey; choose another"
         return ""
 
     def _watch_skin_key(self) -> None:
-        """
-        Drive the strip sweep from the activation key.
-
-        That key is the app's, not the game's: it starts and stops the macro,
-        and the macro is what holds Shift + the hotbar slot afterwards.
-        """
+        """Start and stop painting from the activation key."""
         skin = self.cfg.skin_overcap
-        if not (skin.enabled and sweep.usable(skin.area)):
+        if not (skin.enabled and painting.ready(skin)):
             return
         if self._sweep_kind == "drop":
             self._skin_was_down = w.key_is_down(
@@ -1875,6 +1858,8 @@ class MainWindow(QWidget):
         down = w.key_is_down(vk)
         pressed = down and not self._skin_was_down
         self._skin_was_down = down
+        if not down:
+            self._skin_finished = False
 
         if skin.mode == "toggle":
             if not pressed:
@@ -1882,16 +1867,16 @@ class MainWindow(QWidget):
             if self._sweep_timer.isActive():
                 self._stop_sweep()
             elif self._can_sweep():
-                self._start_skin_sweep()
+                self._start_skin_painting()
             return
 
         if not down:
             self._stop_sweep()
             return
-        if self._sweep_timer.isActive():
+        if self._sweep_timer.isActive() or self._skin_finished:
             return
         if self._can_sweep():
-            self._start_skin_sweep()
+            self._start_skin_painting()
 
     def _start_drop_sweep(self) -> None:
         hold = self.cfg.hold_drop
@@ -1905,40 +1890,29 @@ class MainWindow(QWidget):
         self._begin_sweep(path, hold.dwell_ms,
                           f"hold-to-drop: sweeping {len(path)} slots, {how}")
 
-    def _start_skin_sweep(self) -> None:
+    def _start_skin_painting(self) -> None:
         skin = self.cfg.skin_overcap
-        path = sweep.pingpong(skin.area, skin.stops)
-        if not path:
+        if not painting.ready(skin) or not self._can_sweep():
             return
         self._sweep_kind = "skin"
-        self._hold_chord(True)
-        stop = ("release the key" if skin.mode == "hold" else "press again")
-        self._begin_sweep(
-            path, skin.dwell_ms,
-            f"skin overcap: holding Shift+{skin.key.upper()} and running "
-            f"{len(path)} stops a lap — {stop} to stop")
+        self._skin_phase = "check"
+        self._skin_clicks_in_stack = 0
+        self._skin_total_clicks = 0
+        self._skin_stacks = 0
+        self._skin_missing = 0
+        self._skin_finished = False
+        self._sweep_return = w.get_cursor_pos()
+        self._sweep_hwnd = w.find_window(self.cfg.target.window_title)
+        # Read the lower icon with the cursor upstairs, clear of hover effects.
+        w.move_cursor(*skin.paint_point)
+        self._sweep_timer.start(self._skin_wait_ms())
+        self.lbl_skin_progress.setText("Checking the first dye stack…")
+        self._log("skin overcap: 100 painting clicks per stack; "
+                  "checking the first dye", "info")
 
-    def _hold_chord(self, down: bool) -> None:
-        """
-        Press or release Shift + the hotbar slot the macro holds for you.
-
-        Releasing has to be unconditional and safe to repeat: a Shift left down
-        because a sweep ended some way nobody planned for would follow you out of
-        the game and into everything else you type.
-        """
-        shift = w.vk_from_name("shift")
-        vk = w.vk_from_name(self.cfg.skin_overcap.key)
-        if shift is None or vk is None:
-            return
-        if down:
-            w.key_down(shift)
-            w.key_down(vk)
-            self._chord_held = True
-            return
-        if self._chord_held:
-            w.key_up(vk)
-            w.key_up(shift)
-            self._chord_held = False
+    def _skin_wait_ms(self) -> int:
+        return max(100, self.cfg.skin_overcap.stack_wait_ms
+                   + self.cfg.target.stream_latency_ms)
 
     def _begin_sweep(self, path: list[tuple[int, int]], dwell: int,
                      message: str) -> None:
@@ -1962,11 +1936,11 @@ class MainWindow(QWidget):
         where a finger is already on it, and a press on top of that would be a
         second drop.
         """
+        if self._sweep_kind == "skin":
+            return self._skin_step()
         if not self._sweep_path:
             self._stop_sweep()
             return
-        if self._sweep_kind == "skin":
-            return self._skin_step()
 
         hold = self.cfg.hold_drop
         vk = w.vk_from_name(hold.key)
@@ -1996,14 +1970,14 @@ class MainWindow(QWidget):
         self._advance()
 
     def _skin_step(self) -> None:
-        """
-        One stop per tick along the strip, back and forth.
-
-        The chord is already down — the macro pressed it when the sweep started
-        and holds it until the sweep ends, which is what a finger on Shift and
-        the slot would do.
-        """
+        """One short action per timer tick, so every stop remains responsive."""
         skin = self.cfg.skin_overcap
+        if self._sweep_kind != "skin" or not self._sweep_timer.isActive():
+            return
+        if (not skin.enabled or not painting.ready(skin) or self._picking
+                or (self.engine is not None and self.engine.isRunning())):
+            self._stop_sweep()
+            return
         if skin.mode == "hold":
             vk = w.vk_from_name(skin.activate_key)
             if vk is None or not w.key_is_down(vk):
@@ -2012,7 +1986,50 @@ class MainWindow(QWidget):
         if not w.is_foreground(self._sweep_hwnd):
             self._stop_sweep()
             return
-        self._advance()
+        try:
+            if self._skin_phase == "check":
+                read = w.screen_samples(painting.probe_points(skin.dye_point))
+                if not painting.valid_sample(read):
+                    self._stop_sweep()
+                    self.lbl_skin_progress.setText("Stopped: dye pixels could not be read")
+                    self._log("skin overcap: dye pixels unavailable; recapture "
+                              "with ARK visible and borderless", "err")
+                    return
+                if not painting.matches_dye(skin.dye_sample, read):
+                    self._skin_missing += 1
+                    if self._skin_missing >= 3:
+                        self._stop_sweep()
+                        self.lbl_skin_progress.setText(
+                            f"Finished: captured dye no longer visible · "
+                            f"{self._skin_total_clicks} painting clicks")
+                        self._log("skin overcap: captured dye absent in three "
+                                  "readings; painting finished", "ok")
+                    return
+                self._skin_missing = 0
+                w.click_at(*skin.dye_point, "left", hold=0.02, settle=0.01)
+                w.move_cursor(*skin.paint_point)
+                self._skin_stacks += 1
+                self._skin_clicks_in_stack = 0
+                self._skin_phase = "paint"
+                self._sweep_timer.setInterval(self._skin_wait_ms())
+                self.lbl_skin_progress.setText(
+                    f"Cycle {self._skin_stacks} · waiting for dye selection")
+                return
+            w.click_at(*skin.paint_point, "left", hold=0.02, settle=0.01)
+            self._skin_clicks_in_stack += 1
+            self._skin_total_clicks += 1
+            self.lbl_skin_progress.setText(
+                f"Cycle {self._skin_stacks} · {self._skin_clicks_in_stack}/100 "
+                f"clicks · {self._skin_total_clicks} total")
+            if self._skin_clicks_in_stack >= painting.CLICKS_PER_STACK:
+                self._skin_phase = "check"
+                self._sweep_timer.setInterval(self._skin_wait_ms())
+            else:
+                self._sweep_timer.setInterval(max(50, skin.click_interval_ms))
+        except Exception as error:
+            self._stop_sweep()
+            self.lbl_skin_progress.setText("Stopped: painting input or screen read failed")
+            self._log(f"skin overcap stopped: {error}", "err")
 
     def _advance(self) -> None:
         x, y = self._sweep_path[self._sweep_index % len(self._sweep_path)]
@@ -2020,25 +2037,30 @@ class MainWindow(QWidget):
         self._sweep_index += 1
 
     def _stop_sweep(self) -> None:
-        # released first and unconditionally: every path out of a sweep comes
-        # through here, and a Shift left down would follow the user everywhere
-        self._hold_chord(False)
-        if not self._sweep_timer.isActive():
-            self._sweep_kind = ""
-            return
+        kind = self._sweep_kind
+        active = self._sweep_timer.isActive()
         self._sweep_timer.stop()
-        laps = self._sweep_index / max(len(self._sweep_path), 1)
-        name = "skin overcap" if self._sweep_kind == "skin" else "hold-to-drop"
         self._sweep_kind = ""
-        # put the pointer back where it was, so releasing the key does not leave
-        # the cursor parked on some slot in the middle of the panel
-        if self._sweep_return:
+        self._skin_phase = ""
+        if kind == "skin":
+            self._skin_finished = True
+        if self._sweep_return is not None:
             w.move_cursor(*self._sweep_return)
             self._sweep_return = None
-        self._log(f"{name}: stopped after {self._sweep_index} stops "
-                  f"({laps:.1f} laps)", "ok")
+        if not active:
+            return
+        if kind == "skin":
+            message = (f"skin overcap: stopped after {self._skin_total_clicks} "
+                       f"painting clicks in {self._skin_stacks} cycles")
+            self.lbl_skin_progress.setText(message)
+        else:
+            laps = self._sweep_index / max(len(self._sweep_path), 1)
+            message = (f"hold-to-drop: stopped after {self._sweep_index} stops "
+                       f"({laps:.1f} laps)")
+        self._log(message, "ok")
 
     # ------------------------------------------------------------ auto feeding
+
     def _sync_feed_note(self) -> None:
         """
         Say what is wrong with the two slots while it is still being set up.
@@ -2080,7 +2102,7 @@ class MainWindow(QWidget):
 
     def _afk_tick(self) -> None:
         """One harmless key, only when it cannot get in the way."""
-        if self._picking or self._state == "dropping":
+        if self._picking or self._state == "dropping" or self._sweep_timer.isActive():
             return
         vk = w.vk_from_name(self.cfg.anti_afk.key)
         if vk is None:
@@ -2212,8 +2234,7 @@ class MainWindow(QWidget):
         they are and flagged instead.
         """
         width, height = w.screen_size()
-        for target, name in ((self.cfg.hold_drop, "hold-to-drop area"),
-                             (self.cfg.skin_overcap, "skin overcap strip")):
+        for target, name in ((self.cfg.hold_drop, "hold-to-drop area"),):
             old = target.area_resolution
             if not (old and all(old)) or not sweep.usable(target.area):
                 continue
@@ -2233,6 +2254,15 @@ class MainWindow(QWidget):
             self._log(f"screen changed from {old[0]}x{old[1]} to "
                       f"{width}x{height} — {name} rescaled, check it before "
                       "using it", "warn")
+
+        skin = self.cfg.skin_overcap
+        if (skin.points_resolution and all(skin.points_resolution)
+                and [width, height] != list(skin.points_resolution)):
+            skin.dye_sample = []
+            self.sw_skin.switch.setChecked(False)
+            skin.points_resolution = [0, 0]
+            self._log("screen resolution changed; recapture both painting "
+                      "points and the dye before using skin overcap", "warn")
 
         # The stop sign is the one area a rescale cannot save. Its box can be
         # moved like the others, but what it holds is a remembered picture, and
@@ -2265,28 +2295,33 @@ class MainWindow(QWidget):
         self._log(f"cursor moved to ({x}, {y})", "info")
 
     # ------------------------------------------------------- point picking
-    def _begin_pick(self) -> None:
+    def _begin_pick(self, _checked: bool = False, kind: str = "farm") -> None:
         if self._picking:
             return
+        self._pick_kind = kind
+        self._skin_pick_points = {}
+        self._stop_sweep()
         # a running macro would keep firing clicks into the overlay
         if self.engine is not None and self.engine.isRunning():
             self._stop_macro()
             self._log("macro stopped so it does not click into the picker",
                       "warn")
         self._picking = True
-        self._log("freezing the screen — bring ARK's inventory up", "warn")
+        self._log("freezing the screen — open Apply Dye in ARK" if kind == "skin"
+                  else "freezing the screen — bring ARK's inventory up", "warn")
         self.hide()
         QApplication.processEvents()
         QTimer.singleShot(350, self._grab_and_pick)
 
     def _begin_skin_pick(self) -> None:
-        self._begin_area_pick(kind="skin")
+        self._begin_pick(kind="skin")
 
     def _begin_area_pick(self, _checked: bool = False,
                          kind: str = "drop") -> None:
         if self._picking:
             return
         self._pick_area_kind = kind
+        self._pick_kind = "farm"
         if self.engine is not None and self.engine.isRunning():
             self._stop_macro()
             self._log("macro stopped so it does not click into the picker",
@@ -2525,12 +2560,6 @@ class MainWindow(QWidget):
                                 label="STOP SIGN",
                                 title="Drag a tight box around the icon",
                                 ratio=ratio, grid=False)
-        elif self._pick_area_kind == "skin":
-            stops = self.sp_skin_stops.value()
-            picker = AreaPicker(shot, geo, stops, 1, logical_origin,
-                                label=f"SKIN OVERCAP STRIP · {stops} STOPS",
-                                title="Drag a box over your hotbar",
-                                strip=True, ratio=ratio)
         else:
             picker = AreaPicker(shot, geo, self.sp_hold_cols.value(),
                                 self.sp_hold_rows.value(), logical_origin,
@@ -2543,15 +2572,13 @@ class MainWindow(QWidget):
 
     def _on_area_picked(self, x: int, y: int, width: int, height: int) -> None:
         kind = self._pick_area_kind
-        target = {"skin": self.cfg.skin_overcap,
-                  "stop": self.cfg.stop_sign}.get(kind, self.cfg.hold_drop)
+        target = self.cfg.stop_sign if kind == "stop" else self.cfg.hold_drop
         target.area = [x, y, width, height]
         target.area_resolution = list(w.screen_size())
         self._drop_picker()
         self._picking = False
         self._restore_window()
-        name = {"skin": "skin overcap strip",
-                "stop": "stop sign area"}.get(kind, "hold-to-drop area")
+        name = "stop sign area" if kind == "stop" else "hold-to-drop area"
         self._log(f"{name} set: {width}x{height} px at ({x}, {y})", "ok")
         if kind == "stop":
             self._capture_stop_sign()
@@ -2665,6 +2692,15 @@ class MainWindow(QWidget):
              "Second icon of the row, right next to the crossed arrows that "
              "mean transfer all. Left click to confirm, Esc to cancel."),
         ]
+        if self._pick_kind == "skin":
+            steps = [
+                ("paint", "Click the upper colour region to paint",
+                 "Choose the upper red patch from Apply Dye. The macro will "
+                 "click here 100 times per stack. Esc cancels."),
+                ("dye", "Click the coloured centre of the first dye icon",
+                 "Use the first dye slot below. Its colour is remembered to "
+                 "detect when the dye runs out. Esc cancels."),
+            ]
         if index >= len(steps):
             self._finish_pick()
             return
@@ -2684,6 +2720,11 @@ class MainWindow(QWidget):
             self._picker = None
 
     def _on_picked(self, key: str, x: int, y: int, index: int) -> None:
+        if self._pick_kind == "skin":
+            self._skin_pick_points[key] = [x, y]
+            QTimer.singleShot(60, lambda: self._pick_step(index + 1)
+                              if self._picking else None)
+            return
         self._applying_points = True   # these edits come with a fresh preview
         if key == "filter":
             self.sp_fx.setValue(x)
@@ -2697,6 +2738,7 @@ class MainWindow(QWidget):
         QTimer.singleShot(60, lambda: self._pick_step(index + 1))
 
     def _cancel_pick(self) -> None:
+        self._skin_pick_points = {}
         self._drop_picker()
         self._picking = False
         self._restore_window()
@@ -2705,6 +2747,28 @@ class MainWindow(QWidget):
     def _finish_pick(self) -> None:
         self._drop_picker()
         self._picking = False
+        if self._pick_kind == "skin":
+            points = self._skin_pick_points
+            paint, dye = points.get("paint"), points.get("dye")
+            sample = self._sample_shot(painting.probe_points(dye)) if dye else None
+            self._restore_window()
+            if (not paint or not dye or not any(paint) or not any(dye)
+                    or paint == dye or not painting.valid_sample(sample)):
+                self._skin_pick_points = {}
+                self._log("painting capture failed; select two different "
+                          "points with a visible dye icon", "err")
+                return
+            skin = self.cfg.skin_overcap
+            skin.paint_point = list(paint)
+            skin.dye_point = list(dye)
+            skin.dye_sample = [list(colour) for colour in sample]
+            skin.points_resolution = list(w.screen_size())
+            self._skin_pick_points = {}
+            self._on_change()
+            self._save()
+            self._log("painting points and dye captured; enable skin overcap "
+                      "and use its activation key in ARK", "ok")
+            return
         _x, _y, width, height = self._game_area()
         self.cfg.drop.points_resolution = [width, height]
         self._restore_window()
@@ -2716,7 +2780,7 @@ class MainWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        self._go(PAGE_FARM)
+        self._go(PAGE_OVERCAP if self._pick_kind == "skin" else PAGE_FARM)
 
     # ------------------------------------------------------------ previews
     def _invalidate_thumb(self, key: str) -> None:
@@ -2962,6 +3026,7 @@ class MainWindow(QWidget):
         elif name == "drop_now":
             self._drop_now()
         elif name == "panic":
+            self._stop_sweep()
             self._stop_macro()
             self._log("EMERGENCY STOP", "err")
         elif name == "pick_points":
@@ -3002,7 +3067,6 @@ class MainWindow(QWidget):
         self._afk_timer.stop()
         self._auto_timer.stop()
         self._hold_watch.stop()
-        # also releases the chord if a sweep was holding it
         self._stop_sweep()
         # the macro stopping here must not kick off a pull on the way out
         self._update_pending = False

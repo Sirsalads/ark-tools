@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from .painting import valid_sample
 from .presets import default_templates
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
@@ -123,25 +124,21 @@ class HoldDrop:
 
 @dataclass
 class SkinOvercap:
-    """
-    Runs the cursor along a strip with Shift + a hotbar key held down.
-
-    Two different keys, and they must not be confused. `activate_key` is the one
-    you press: it belongs to the app and does nothing in the game. Shift and
-    `key` are the instruction — the chord the macro itself holds while it
-    sweeps, so your hands are free.
-    """
+    """Uses each dye stack with 100 paint clicks, then selects the next dye."""
 
     enabled: bool = False
     activate_key: str = "f4"        # yours, to start and stop the macro
     # hold   -> runs while you hold the activation key
     # toggle -> one press starts it, another stops it
     mode: str = "toggle"
-    key: str = "2"                  # the hotbar slot the macro holds with Shift
-    area: list[int] = field(default_factory=lambda: [0, 0, 0, 0])  # x,y,w,h
-    area_resolution: list[int] = field(default_factory=lambda: [0, 0])
-    stops: int = 10                 # points across the strip, one per hotbar slot
-    dwell_ms: int = 40
+    paint_point: list[int] = field(default_factory=lambda: [0, 0])
+    dye_point: list[int] = field(default_factory=lambda: [0, 0])
+    points_resolution: list[int] = field(default_factory=lambda: [0, 0])
+    # A small patch at the centre of the dye icon lets the macro stop when the
+    # last stack disappears instead of clicking the empty list indefinitely.
+    dye_sample: list[list[int]] = field(default_factory=list)
+    click_interval_ms: int = 80
+    stack_wait_ms: int = 500
 
 
 @dataclass
@@ -290,6 +287,16 @@ def _migrate(cfg: "Config", raw: dict) -> None:
         if held.get("mode", "hold") == "hold":
             cfg.hold_drop.mode = "manual"
 
+    skin = raw.get("skin_overcap")
+    if isinstance(skin, dict) and "paint_point" not in skin:
+        # The old hotbar strip cannot identify either painting target. Retain
+        # the activation preference, but require fresh captures before use.
+        cfg.skin_overcap.enabled = False
+        cfg.skin_overcap.paint_point = [0, 0]
+        cfg.skin_overcap.dye_point = [0, 0]
+        cfg.skin_overcap.points_resolution = [0, 0]
+        cfg.skin_overcap.dye_sample = []
+
     legacy = drop.get("keywords")
     if legacy and "templates" not in drop:
         cfg.drop.templates = [
@@ -381,12 +388,14 @@ def _sanitize(cfg: "Config") -> None:
     hold.mode = mode if mode in ("toggle", "hold", "manual") else "manual"
 
     skin = cfg.skin_overcap
-    skin.area = _rect(skin.area)
-    skin.area_resolution = _point(skin.area_resolution)
-    # two stops is a strip with only its ends; below that there is no sweep
-    skin.stops = _count(skin.stops, 10, 2, 40)
-    skin.dwell_ms = _count(skin.dwell_ms, 40, 5, 1000)
-    skin.key = str(skin.key).strip().lower()
+    skin.enabled = bool(skin.enabled)
+    skin.paint_point = _point(skin.paint_point)
+    skin.dye_point = _point(skin.dye_point)
+    skin.points_resolution = _point(skin.points_resolution)
+    skin.click_interval_ms = _count(skin.click_interval_ms, 80, 50, 2000)
+    skin.stack_wait_ms = _count(skin.stack_wait_ms, 500, 100, 5000)
+    skin.dye_sample = ([list(colour) for colour in skin.dye_sample]
+                       if valid_sample(skin.dye_sample) else [])
     skin.activate_key = str(skin.activate_key).strip().lower()
     skin.mode = ("hold" if str(skin.mode).strip().lower() == "hold"
                  else "toggle")
