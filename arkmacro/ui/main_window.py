@@ -51,6 +51,9 @@ APP_NAME = "A.N.S Tools"
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 STATE_DIR = ROOT / "state"
+# the on-screen log, kept on disk so a session can be read back after the fact
+LOG_PATH = STATE_DIR / "log.txt"
+LOG_MAX_BYTES = 512 * 1024
 CAPTURE_DIR = ROOT / "captures"
 
 # how often unattended updating looks for a new commit. Long on purpose: this
@@ -65,15 +68,22 @@ HOTBAR = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 # hold-to-drop run modes, in the order the combo lists them
 HOLD_MODES = ["toggle", "hold", "manual"]
 
-# Painting pace. The clicks go out from the window's own thread, so one tick
-# may only keep it for this long before handing the event loop back — past
-# that the window stops answering, and so does the F4 that is meant to stop it.
-PAINT_BURST_MS = 12
-# How long the button stays down on a paint click. The game's UI reads its
-# messages in order, so a down and an up two milliseconds apart are still a
-# click; the hold grows with the gap for a game that wants more.
-PAINT_HOLD_MIN_S = 0.002
-PAINT_HOLD_MAX_S = 0.02
+# How long the button stays down on a paint click. A frame is 16.7 ms at
+# 60 fps and the game reads its mouse messages per frame, so a press shorter
+# than that can begin and end inside one frame and be read as nothing at all.
+# 20 ms is the value that was painting reliably before anyone tried to make it
+# faster; it only shrinks when the gap itself is smaller than two of them.
+PAINT_HOLD_MS = 20
+PAINT_HOLD_MIN_MS = 4
+# After the cursor moves, before the click on the new spot: the UI has to see
+# the pointer arrive before it can see a press there.
+MOVE_SETTLE_MS = 40
+# After selecting a dye, before the first click on the paint region. Selecting
+# is a UI state change the game applies on a later frame, and a paint click
+# that overtakes it is painting with nothing selected. Not a setting: it is
+# the game's own timing, and going below it does not paint faster, it paints
+# less.
+SELECT_SETTLE_MS = 250
 # A slot that read empty is read again no sooner than this, whatever the stack
 # pause is set to. The three readings that end a run have to span the moment
 # the list is being redrawn, or one blank frame ends a run with stacks left.
@@ -902,24 +912,30 @@ class MainWindow(QWidget):
         self.cb_skin_mode = combo(["Press to start and stop", "Hold the key"],
                                   1 if skin.mode == "hold" else 0, width=230)
         sgrid.add("How it runs", self.cb_skin_mode)
-        self.sp_skin_interval = spin(0, 2000, skin.click_interval_ms, " ms", 5)
+        self.sp_skin_interval = spin(5, 2000, skin.click_interval_ms, " ms", 5)
         sgrid.add("Time between clicks", self.sp_skin_interval,
-                  "0 is as fast as clicks can be sent — hundreds a second. "
-                  "Raise it only if the game visibly misses paint clicks")
+                  "40 ms is about 25 clicks a second. The limit is the game, "
+                  "not the app: ARK reads its mouse once a frame, so clicks "
+                  "closer together than a frame are dropped rather than "
+                  "painted. Lower this until your stacks stop shrinking, then "
+                  "go back up")
         self.sp_skin_pause = spin(0, 5000, skin.stack_pause_ms, " ms", 50)
         sgrid.add("Pause before the next stack", self.sp_skin_pause,
                   "After the 100 clicks, before the first slot is read and the "
-                  "next stack selected. Selecting goes straight back to "
-                  "painting; 0 is no pause at all. Stream latency is added")
+                  "next stack selected. Raise it if the list is slow to redraw. "
+                  "Selecting always waits a further quarter second for the game "
+                  "to apply it, which is not a setting. Stream latency is added")
         card.add(sgrid)
         self.skin_note = hint_label("")
         card.add(self.skin_note)
         card.add(hint_label(
             "Each cycle sends 100 clicks, then selects the first slot again and "
-            "keeps painting — no waiting in between. A partly used stack just "
-            "gets selected once more. The counter records click attempts, not "
-            "confirmed dye consumption. Your emergency-stop key (F8 by default) "
-            "stops the macro."))
+            "keeps painting. A partly used stack just gets selected once more. "
+            "The counter records click attempts — the app cannot see how much "
+            "dye the game actually consumed, so if the count climbs and your "
+            "stacks do not move, the clicks are going out faster than the game "
+            "reads them: raise the time between clicks. Your emergency-stop key "
+            "(F8 by default) stops the macro."))
         return card
 
     def _skin_points_card(self) -> Card:
@@ -2050,44 +2066,42 @@ class MainWindow(QWidget):
         w.move_cursor(*skin.paint_point)
         self._sweep_timer.start(self._skin_pause_ms())
         self.lbl_skin_progress.setText("Checking the first dye stack…")
-        pace = (f"{skin.click_interval_ms} ms between clicks"
-                if skin.click_interval_ms else "as fast as clicks can be sent")
-        self._log(f"skin overcap: 100 painting clicks per stack, {pace}; "
-                  "checking the first dye", "info")
+        rate = 1000.0 / max(skin.click_interval_ms, 1)
+        self._log(f"skin overcap: 100 painting clicks per stack, "
+                  f"{skin.click_interval_ms} ms apart (about {rate:.0f} a "
+                  "second); checking the first dye", "info")
 
     def _skin_pause_ms(self) -> int:
-        """The one pause in the cycle: after the clicks, before the slot is read."""
+        """After the clicks, before the slot is read: the setting, plus latency."""
         return max(0, self.cfg.skin_overcap.stack_pause_ms
                    + self.cfg.target.stream_latency_ms)
 
-    def _paint_burst(self) -> int:
-        """
-        Send paint clicks for up to one tick's budget; return how many went.
+    def _select_settle_ms(self) -> int:
+        """After selecting a dye, before painting it. See SELECT_SETTLE_MS."""
+        return SELECT_SETTLE_MS + max(0, self.cfg.target.stream_latency_ms)
 
-        The setting is the gap between clicks. At a gap the timer can keep on
-        its own, a tick sends one click and the timer waits out the gap. Below
-        that, the gap is slept here and a tick sends as many clicks as fit in
-        PAINT_BURST_MS — at zero, back to back, hundreds a second. The game will
-        not take that many, and it does not have to: a click it drops costs
-        nothing, the stack is just selected again. The game sets the pace; the
-        app only makes sure it is never the app that is waiting.
+    def _paint_hold_ms(self) -> float:
         """
-        skin = self.cfg.skin_overcap
-        gap = skin.click_interval_ms / 1000.0
-        hold = min(PAINT_HOLD_MAX_S, max(PAINT_HOLD_MIN_S, gap / 3))
-        room = painting.CLICKS_PER_STACK - self._skin_clicks_in_stack
-        deadline = time.perf_counter() + PAINT_BURST_MS / 1000.0
-        sent = 0
-        while sent < room:
-            w.click_at(*skin.paint_point, "left", hold=hold, settle=0)
-            sent += 1
-            if skin.click_interval_ms >= PAINT_BURST_MS:
-                break               # the timer keeps this gap, one click a tick
-            if time.perf_counter() + gap >= deadline:
-                break
-            if gap:
-                time.sleep(gap)
-        return sent
+        How long one paint click holds the button.
+
+        Long enough for the game to read the press on a frame of its own, and
+        never more than half the gap — two clicks must not overlap into one
+        long press, which is a drag, not a hundred clicks.
+        """
+        gap = self.cfg.skin_overcap.click_interval_ms
+        return max(PAINT_HOLD_MIN_MS, min(PAINT_HOLD_MS, gap / 2))
+
+    def _paint_tick_ms(self) -> int:
+        """
+        What to set the timer to so that clicks land one gap apart.
+
+        The hold happens on this thread, so it is part of the period whether it
+        is counted or not: a 40 ms timer with a 20 ms press in the handler puts
+        61 ms between clicks, and the field then means nothing. It is taken off
+        here, so the number on screen is the number the game gets.
+        """
+        gap = self.cfg.skin_overcap.click_interval_ms
+        return max(1, round(gap - self._paint_hold_ms()))
 
     def _begin_sweep(self, path: list[tuple[int, int]], dwell: int,
                      message: str) -> None:
@@ -2186,22 +2200,26 @@ class MainWindow(QWidget):
                         max(self._skin_pause_ms(), MISS_RETRY_MS))
                     return
                 self._skin_missing = 0
-                w.click_at(*skin.dye_point, "left", hold=0.02, settle=0.01)
+                # the cursor is upstairs for the read, so this one click needs
+                # the pointer to arrive at the slot before it presses
+                w.click_at(*skin.dye_point, "left", hold=PAINT_HOLD_MS / 1000.0,
+                           settle=MOVE_SETTLE_MS / 1000.0)
+                # and then back to the paint region, once: from here every
+                # click of the stack lands on a cursor that is already there
                 w.move_cursor(*skin.paint_point)
                 self._skin_stacks += 1
                 self._skin_clicks_in_stack = 0
                 self._skin_phase = "paint"
-                # Straight back to painting. The selection is the game's own UI
-                # state and the first paint click queues up behind it; nothing
-                # is gained by standing here, and every stack change used to
-                # stand here for half a second.
-                self._sweep_timer.setInterval(skin.click_interval_ms)
+                self._sweep_timer.setInterval(self._select_settle_ms())
                 self.lbl_skin_progress.setText(
                     f"Cycle {self._skin_stacks} · dye selected, painting")
                 return
-            sent = self._paint_burst()
-            self._skin_clicks_in_stack += sent
-            self._skin_total_clicks += sent
+            # No move: the cursor has not left the paint region since the phase
+            # began. A move on every click is an extra input event for the game
+            # to chew through, and it is the clicks that paint.
+            w.click("left", hold=self._paint_hold_ms() / 1000.0)
+            self._skin_clicks_in_stack += 1
+            self._skin_total_clicks += 1
             self.lbl_skin_progress.setText(
                 f"Cycle {self._skin_stacks} · {self._skin_clicks_in_stack}/100 "
                 f"clicks · {self._skin_total_clicks} total")
@@ -2209,7 +2227,7 @@ class MainWindow(QWidget):
                 self._skin_phase = "select"
                 self._sweep_timer.setInterval(self._skin_pause_ms())
             else:
-                self._sweep_timer.setInterval(skin.click_interval_ms)
+                self._sweep_timer.setInterval(self._paint_tick_ms())
         except Exception as error:
             self._stop_sweep()
             self.lbl_skin_progress.setText("Stopped: painting input or screen read failed")
@@ -3250,6 +3268,34 @@ class MainWindow(QWidget):
                 f'<span style="color:{color}">{escape(message)}</span>')
         self.log_view.appendHtml(line)
         self.mini_log.appendHtml(line)
+        self._log_to_file(stamp, message, level)
+
+    def _log_to_file(self, stamp: str, message: str, level: str) -> None:
+        """
+        Keep the log after the window is gone.
+
+        On screen it scrolls past and it dies with the app, so "it does not
+        work" arrives with nothing attached and the reason — which the log had
+        already given — has to be guessed at twice. This is the file to ask
+        for. It is plain text, it is capped, and a disk that will not take it
+        must never be the thing that stops a farm, so every failure here is
+        swallowed on purpose.
+        """
+        try:
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with LOG_PATH.open("a", encoding="utf-8") as handle:
+                print(f"{time.strftime('%Y-%m-%d')} {stamp} "
+                      f"{level:<4} {message}", file=handle)
+            if LOG_PATH.stat().st_size > LOG_MAX_BYTES:
+                # halve it rather than empty it: the lines that explain a
+                # session are the recent ones, and losing all of them to a
+                # size limit is how a log stops being worth keeping
+                kept = LOG_PATH.read_text(encoding="utf-8",
+                                          errors="replace").splitlines(True)
+                LOG_PATH.write_text("".join(kept[len(kept) // 2:]),
+                                    encoding="utf-8")
+        except (OSError, ValueError):
+            pass
 
     # --------------------------------------------------------------- close
     def closeEvent(self, event) -> None:

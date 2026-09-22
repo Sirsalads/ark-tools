@@ -137,15 +137,16 @@ class SkinOvercap:
     # A small patch at the centre of the dye icon lets the macro stop when the
     # last stack disappears instead of clicking the empty list indefinitely.
     dye_sample: list[list[int]] = field(default_factory=list)
-    # gap between paint clicks. 0 is as fast as clicks can be sent — hundreds a
-    # second, more than the game takes, and that is fine: a click the game
-    # drops costs nothing, the stack is simply selected again. Raise it only
-    # if the game visibly misses clicks
-    click_interval_ms: int = 0
+    # Gap between paint clicks. The floor is the game, not the app: ARK draws
+    # at 60-144 frames a second and reads its mouse messages per frame, so a
+    # click has to be spaced and held on the order of a frame to be taken at
+    # all. 40 ms is about 25 clicks a second — well clear of a frame at 60 fps
+    # and four times what this used to manage. Lower it if the game keeps up
+    click_interval_ms: int = 40
     # after the 100 clicks, before the first slot is read and the next stack
-    # selected. Selecting goes straight back to painting either way; this is
-    # the only pause in the cycle, and 0 means none
-    stack_pause_ms: int = 0
+    # selected. The cycle has one other wait, after selecting, which is not a
+    # setting: it is what the game needs to apply the selection
+    stack_pause_ms: int = 150
 
 
 @dataclass
@@ -307,12 +308,23 @@ def _migrate(cfg: "Config", raw: dict) -> None:
         # Painting used to be paced at 80 ms a click with a 500 ms wait on
         # either side of every stack change, and 50 ms was as low as the field
         # went. A file still on the default, or on that floor — which is what
-        # someone chasing speed ended up on — follows the new default, which is
-        # as fast as it goes. A number that was actually chosen stays.
+        # someone chasing speed ended up on — follows the new default. A number
+        # that was actually chosen stays.
         if skin.get("click_interval_ms", 80) in (50, 80):
-            cfg.skin_overcap.click_interval_ms = 0
+            cfg.skin_overcap.click_interval_ms = SkinOvercap.click_interval_ms
         wait = skin.get("stack_wait_ms", 500)
-        cfg.skin_overcap.stack_pause_ms = 0 if wait == 500 else wait
+        if wait != 500:
+            cfg.skin_overcap.stack_pause_ms = wait
+    elif isinstance(skin, dict) and skin.get("click_interval_ms") == 0:
+        # A gap of zero was one build's default and it was a mistake: clicks
+        # went out every 2.5 ms, held for 2.5 ms, which is a fraction of the
+        # frame the game reads them on, and it painted nothing at all. Nobody
+        # chose it — it could only have been inherited — so it is corrected
+        # rather than kept, along with the no-wait stack change that shipped
+        # with it.
+        cfg.skin_overcap.click_interval_ms = SkinOvercap.click_interval_ms
+        if skin.get("stack_pause_ms") == 0:
+            cfg.skin_overcap.stack_pause_ms = SkinOvercap.stack_pause_ms
 
     legacy = drop.get("keywords")
     if legacy and "templates" not in drop:
@@ -409,8 +421,12 @@ def _sanitize(cfg: "Config") -> None:
     skin.paint_point = _point(skin.paint_point)
     skin.dye_point = _point(skin.dye_point)
     skin.points_resolution = _point(skin.points_resolution)
-    skin.click_interval_ms = _count(skin.click_interval_ms, 0, 0, 2000)
-    skin.stack_pause_ms = _count(skin.stack_pause_ms, 0, 0, 5000)
+    # 5 ms is not a recommendation, it is the point below which the numbers
+    # stop meaning anything: the app can send them, the game cannot read them
+    skin.click_interval_ms = _count(skin.click_interval_ms,
+                                    SkinOvercap.click_interval_ms, 5, 2000)
+    skin.stack_pause_ms = _count(skin.stack_pause_ms,
+                                 SkinOvercap.stack_pause_ms, 0, 5000)
     skin.dye_sample = ([list(colour) for colour in skin.dye_sample]
                        if valid_sample(skin.dye_sample) else [])
     skin.activate_key = str(skin.activate_key).strip().lower()

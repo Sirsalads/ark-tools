@@ -390,13 +390,17 @@ match that reference. Partial stacks such as **x97** work too; the macro sends
 100 attempts before selecting again. It does **not** read the quantity with
 OCR, so its counter is click attempts, not a confirmed total of dyes consumed.
 
-Out of the box it clicks **as fast as it can** (time between clicks **0**) and
-goes from one stack to the next **without pausing**: 100 clicks, read the
-slot, select, keep clicking. The game will not take a few hundred clicks a
-second and does not need to — clicks it drops cost nothing, the stack is just
-selected again. Raise **Time between clicks** only if the game visibly misses
-clicks, and **Pause before the next stack** only if the list updates slowly.
-GeForce NOW's configured stream latency is added to the pause.
+Out of the box it clicks every **40 ms** — about 25 a second, four times what
+it used to manage — and moves between stacks in well under a second. The limit
+is **the game, not the app**: ARK reads its mouse once a frame, so clicks
+closer together than a frame get dropped instead of painted. Lower **Time
+between clicks** until your stacks stop shrinking, then go back up; raise
+**Pause before the next stack** if the dye list is slow to redraw. GeForce
+NOW's configured stream latency is added to the waits.
+
+If the click counter climbs and your dye does not move, that is the symptom of
+clicking faster than ARK reads: the app counts attempts, it cannot see what
+the game consumed.
 
 Press **`F4` again to stop**, or **`F8` for emergency stop**. It also stops if
 ARK loses focus, the screen cannot be read, you disable it or close the app.
@@ -407,7 +411,8 @@ HUD, game window position or resolution.
 that goes nowhere says why — the switch is off, ARK is not the window in front
 (it names the one that is), the farm macro is running, or the screen is frozen
 for picking. The note under the switch on the Overcap skin page says the same
-before you press anything.
+before you press anything. The same log is written to `state/log.txt` and
+survives closing the app, so it can be read or sent afterwards.
 
 ---
 

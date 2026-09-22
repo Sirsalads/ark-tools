@@ -836,7 +836,26 @@ ups: list[int] = []
 clicks: list[tuple[int, int]] = []
 w_module.key_down = lambda vk: downs.append(vk)
 w_module.key_up = lambda vk: ups.append(vk)
-w_module.click_at = lambda x, y, *_args, **_kwargs: clicks.append((x, y))
+# Paint clicks no longer carry a coordinate: the cursor is moved onto the paint
+# region once and every click of the stack goes out where it already is. So the
+# recorder tracks the cursor and books each click against it, which is what the
+# game sees — and what the old per-click move was there to guarantee.
+at = {"pos": None}
+
+
+def _moved(x, y):
+    at["pos"] = (x, y)
+    moves.append((x, y))
+
+
+def _clicked_at(x, y, *_args, **_kwargs):
+    at["pos"] = (x, y)
+    clicks.append((x, y))
+
+
+w_module.move_cursor = _moved
+w_module.click_at = _clicked_at
+w_module.click = lambda *_args, **_kwargs: clicks.append(at["pos"])
 activate = {"down": False}
 w_module.key_is_down = lambda vk: activate["down"] and vk == 0x73    # F4
 paint_point, dye_point = (160, 320), (190, 520)
@@ -883,9 +902,10 @@ start_painting()
 assert clicks == [], "starting painted before confirming the dye was present"
 win._sweep_step()
 assert clicks == [dye_point], clicks
-# selecting goes straight back to painting: the next tick is a paint click,
-# not a wait — the old half-second stand here is what got complained about
-assert win._sweep_timer.interval() == win.cfg.skin_overcap.click_interval_ms
+# selecting is a UI state change the game applies on a later frame, so the
+# first paint click waits it out rather than overtaking it
+from arkmacro.ui.main_window import SELECT_SETTLE_MS  # noqa: E402
+assert win._sweep_timer.interval() == SELECT_SETTLE_MS
 for _ in range(100):
     win._sweep_step()
 assert clicks == [dye_point] + [paint_point] * 100, \
@@ -897,7 +917,9 @@ win._sweep_step()
 assert clicks[-1] == dye_point and clicks.count(dye_point) == 2
 win._sweep_step()
 assert clicks[-1] == paint_point
-assert win._sweep_timer.interval() >= win.cfg.skin_overcap.click_interval_ms
+# the press is part of the period, so the timer holds what is left of the gap
+assert win._sweep_timer.interval() == win._paint_tick_ms()
+assert win._paint_tick_ms() + win._paint_hold_ms() ==     win.cfg.skin_overcap.click_interval_ms, "the field is not the real pace"
 assert not taps and not downs and not ups, "painting sent keyboard input"
 
 # Toggle presses are edges, not a key held over several watcher ticks.
@@ -916,8 +938,8 @@ inventory = {"selected": False, "used": 0}
 clicks.clear()
 
 
-def paint_inventory(x, y, *_args, **_kwargs):
-    point = (x, y)
+def paint_inventory(point):
+    """What the game does with a click, wherever it landed."""
     clicks.append(point)
     if point == dye_point:
         inventory["selected"] = bool(remaining)
@@ -929,7 +951,11 @@ def paint_inventory(x, y, *_args, **_kwargs):
             inventory["selected"] = False
 
 
-w_module.click_at = paint_inventory
+# the dye slot is clicked at a coordinate; the paint region is clicked wherever
+# the cursor was left, which is the whole point of moving it only once
+w_module.click_at = lambda x, y, *_a, **_k: (_moved(x, y),
+                                             paint_inventory((x, y)))
+w_module.click = lambda *_a, **_k: paint_inventory(at["pos"])
 w_module.screen_samples = lambda _points: dye_sample if remaining else empty_sample
 start_painting()
 for _ in range(400):
@@ -944,7 +970,8 @@ assert not taps and not downs and not ups, "the old Shift/hotbar chord survived"
 print("OK  two full stacks and a partial stack are consumed and then stop")
 
 # ------------------------- 23c) an empty reading must settle, a failed read stops
-w_module.click_at = lambda x, y, *_args, **_kwargs: clicks.append((x, y))
+w_module.click_at = _clicked_at
+w_module.click = lambda *_args, **_kwargs: clicks.append(at["pos"])
 clicks.clear()
 w_module.screen_samples = lambda _points: empty_sample
 start_painting()
@@ -975,37 +1002,49 @@ assert not win._sweep_timer.isActive() and not clicks, \
 w_module.screen_samples = lambda _points: dye_sample
 print("OK  empty frames are retried with a wait; an unreadable screen stops")
 
-# ------------------------- 23c2) the pace: bursts at zero, one a tick above
-from arkmacro.ui.main_window import (MISS_RETRY_MS, PAINT_BURST_MS,  # noqa: E402
-                                     PAINT_HOLD_MAX_S, PAINT_HOLD_MIN_S)
-holds: list[float] = []
+# ------------------------- 23c2) the pace a game can actually read
+# A build that clicked every 2.5 ms and held the button 2.5 ms painted nothing:
+# ARK reads its mouse once a frame, and a press that begins and ends inside one
+# frame is not a click to it. One click per tick, held on the order of a frame,
+# and never two of them overlapping into a drag.
+from arkmacro.ui.main_window import (MISS_RETRY_MS, MOVE_SETTLE_MS,  # noqa: E402
+                                     PAINT_HOLD_MIN_MS, PAINT_HOLD_MS)
+holds: list[tuple] = []
+w_module.click = lambda *_a, hold=0.0, **_k: (
+    clicks.append(at["pos"]), holds.append(hold))
 w_module.click_at = lambda x, y, *_a, hold=0.0, settle=0.0, **_k: (
-    clicks.append((x, y)), holds.append((hold, settle)))
-win.sp_skin_interval.setValue(0)
-win.sp_skin_pause.setValue(0)
+    _clicked_at(x, y), holds.append((hold, settle)))
+win.sp_skin_interval.setValue(40)
+win.sp_skin_pause.setValue(150)
 win._pull()
-clicks.clear(); holds.clear()
+clicks.clear(); holds.clear(); moves.clear()
 start_painting()
 win._sweep_step()                            # select
 assert clicks == [dye_point]
-assert win._sweep_timer.interval() == 0, "selecting did not go straight on"
-win._sweep_step()                            # one paint tick
-sent = len(clicks) - 1
-assert 2 <= sent <= 100, f"a zero-gap tick sent {sent} clicks"
-assert all(h == (PAINT_HOLD_MIN_S, 0) for h in holds[1:]), holds[1:]
-while win._skin_phase == "paint":
+# the pointer has to arrive at the slot before it is pressed, and the press is
+# a real one — this is the click the whole run depends on
+assert holds[-1] == (PAINT_HOLD_MS / 1000.0, MOVE_SETTLE_MS / 1000.0), holds[-1]
+assert moves[-1] == paint_point, "the cursor did not return to the paint region"
+assert win._sweep_timer.interval() == SELECT_SETTLE_MS
+
+moves.clear()
+for _ in range(100):
     win._sweep_step()
-assert clicks.count(paint_point) == 100, "a burst ran past the stack"
-assert win._sweep_timer.interval() == 0, "a pause of 0 was not honoured"
-# an empty reading is still spaced out, whatever the pause says
+assert clicks == [dye_point] + [paint_point] * 100, "a click missed the region"
+assert not moves, "the cursor was moved again during the stack"
+assert all(h == PAINT_HOLD_MS / 1000.0 for h in holds[1:]), holds[1:]
+assert win._sweep_timer.interval() == 150, win._sweep_timer.interval()
+# an empty reading is spaced out whatever the pause says: the three misses that
+# end a run have to span a redraw, or one blank frame ends it early
 w_module.screen_samples = lambda _points: empty_sample
 win._sweep_step()
 assert win._sweep_timer.interval() >= MISS_RETRY_MS, win._sweep_timer.interval()
 w_module.screen_samples = lambda _points: dye_sample
 win._stop_sweep()
 
-# above the burst budget the timer keeps the gap: one click a tick, held longer
-for gap, hold in ((30, 0.01), (2000, PAINT_HOLD_MAX_S)):
+# the gap is one click a tick at any setting, and the hold never grows past
+# half of it — two clicks running together would be a drag, not two clicks
+for gap, hold_ms in ((5, 2.5), (30, 15), (2000, PAINT_HOLD_MS)):
     win.sp_skin_interval.setValue(gap)
     win._pull()
     clicks.clear(); holds.clear()
@@ -1013,15 +1052,22 @@ for gap, hold in ((30, 0.01), (2000, PAINT_HOLD_MAX_S)):
     win._sweep_step()                        # select
     win._sweep_step()                        # paint
     assert clicks.count(paint_point) == 1, (gap, clicks)
-    assert holds[-1] == (hold, 0), (gap, holds[-1])
-    assert win._sweep_timer.interval() == gap
+    held_ms = max(PAINT_HOLD_MIN_MS, hold_ms)
+    assert holds[-1] == held_ms / 1000.0, (gap, holds[-1])
+    assert held_ms <= gap / 2 or gap < 2 * PAINT_HOLD_MIN_MS, gap
+    # the press happens on this thread, so the timer carries the rest of the
+    # period: what the field asks for is what lands, not the field plus a press
+    assert win._sweep_timer.interval() == max(1, round(gap - held_ms)), gap
     win._stop_sweep()
-assert PAINT_BURST_MS < 30
+# and the field itself cannot be taken below the floor
+win.sp_skin_interval.setValue(0)
+assert win.sp_skin_interval.value() == 5, win.sp_skin_interval.value()
 win.sp_skin_interval.setValue(80)
 win.sp_skin_pause.setValue(500)
 win._pull()
-w_module.click_at = lambda x, y, *_args, **_kwargs: clicks.append((x, y))
-print("OK  zero gap sends bursts, a set gap is one click a tick, held longer")
+w_module.click = lambda *_args, **_kwargs: clicks.append(at["pos"])
+w_module.click_at = _clicked_at
+print("OK  one click a tick, held like a frame, landing where the cursor is")
 
 # ------------------------- 23d) focus, panic and hold release stop before clicking
 for leave in ("focus", "panic", "close", "farm", "picker"):
@@ -1243,6 +1289,37 @@ win.sw_skin.switch.setChecked(False)
 win._pull()
 win._log = quiet_log
 print("OK  every ignored press says why, a quick tap counts, and a capture arms it")
+
+# ------------------------- 23h) the log outlives the window
+# Two rounds of "it does not work" arrived with nothing attached, while the
+# reason was sitting in a log that dies with the app. It is a file now.
+import arkmacro.ui.main_window as mw_module  # noqa: E402
+
+log_file = pathlib.Path(tempfile.mkdtemp()) / "state" / "log.txt"
+real_log_path, mw_module.LOG_PATH = mw_module.LOG_PATH, log_file
+win._write("a line worth keeping", "warn")
+win._write("and <b>markup</b> stays literal", "err")
+written = log_file.read_text(encoding="utf-8")
+assert "a line worth keeping" in written, written
+assert "warn" in written and "err " in written, written
+assert "<b>markup</b>" in written, "the file is plain text, not the HTML view"
+assert len(written.splitlines()) == 2, written
+
+# it is capped, and what survives is the recent half, not nothing
+mw_module.LOG_MAX_BYTES = 400
+for index in range(60):
+    win._write(f"line {index}", "info")
+kept = log_file.read_text(encoding="utf-8")
+assert len(kept) <= 800, len(kept)
+assert "line 59" in kept, "the cap threw away the lines that explain the end"
+assert "line 0" not in kept, "nothing was actually trimmed"
+
+# and a disk that will not take it never stops a farm
+mw_module.LOG_PATH = log_file / "not-a-directory" / "log.txt"
+win._write("this one cannot be written", "err")     # must not raise
+mw_module.LOG_PATH = real_log_path
+mw_module.LOG_MAX_BYTES = 512 * 1024
+print("OK  the log is written to a file, capped, and never fatal")
 
 # ------------------------------------------------- 24) the area picker
 from arkmacro.ui.picker import AreaPicker  # noqa: E402

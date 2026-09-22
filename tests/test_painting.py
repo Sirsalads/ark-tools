@@ -138,7 +138,7 @@ class PaintingConfigTests(unittest.TestCase):
         self.assertEqual(skin.dye_point, [0, 0])
         self.assertEqual(skin.points_resolution, [0, 0])
         self.assertEqual(skin.dye_sample, [])
-        self.assertEqual(skin.click_interval_ms, 0)
+        self.assertEqual(skin.click_interval_ms, 5)
         self.assertEqual(skin.stack_pause_ms, 5000)
         self.assertEqual(skin.activate_key, "f4")
         self.assertEqual(skin.mode, "toggle")
@@ -146,7 +146,7 @@ class PaintingConfigTests(unittest.TestCase):
 
     def test_waits_have_bounds_and_fallbacks(self):
         for click, pause, expected in ((99999, -1, (2000, 0)),
-                                       (None, "invalid", (0, 0)),
+                                       (None, "invalid", (40, 150)),
                                        ("125", "750", (125, 750))):
             with self.subTest(click=click, pause=pause):
                 skin = self.load_skin({"paint_point": [1, 2],
@@ -158,10 +158,10 @@ class PaintingConfigTests(unittest.TestCase):
     def test_old_pacing_moves_to_the_new_floor_once(self):
         # the old default (80) and the old floor (50) both follow the new
         # default; a number that was chosen stays, and so does a pause that was
-        for click, wait, expected in ((80, 500, (0, 0)),
-                                      (50, 500, (0, 0)),
+        for click, wait, expected in ((80, 500, (40, 150)),
+                                      (50, 500, (40, 150)),
                                       (120, 900, (120, 900)),
-                                      (50, 300, (0, 300))):
+                                      (50, 300, (40, 300))):
             with self.subTest(click=click, wait=wait):
                 skin = self.load_skin({"paint_point": [1, 2],
                                       "click_interval_ms": click,
@@ -173,6 +173,25 @@ class PaintingConfigTests(unittest.TestCase):
         skin = self.load_skin({"paint_point": [1, 2], "click_interval_ms": 80,
                                "stack_pause_ms": 0})
         self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms), (80, 0))
+
+    def test_the_zero_gap_build_is_corrected_not_inherited(self):
+        # A gap of 0 painted nothing: 2.5 ms between clicks, held 2.5 ms, which
+        # is a fraction of the frame the game reads them on. It was one build's
+        # default, so nobody chose it, and it is replaced rather than clamped.
+        skin = self.load_skin({"paint_point": [1, 2], "click_interval_ms": 0,
+                               "stack_pause_ms": 0})
+        self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms),
+                         (40, 150))
+        # a pause that was chosen survives the correction of the gap
+        skin = self.load_skin({"paint_point": [1, 2], "click_interval_ms": 0,
+                               "stack_pause_ms": 800})
+        self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms),
+                         (40, 800))
+        # and the floor is a floor: a hand-typed 1 ms is raised to where the
+        # numbers still mean something, not accepted
+        skin = self.load_skin({"paint_point": [1, 2], "click_interval_ms": 1,
+                               "stack_pause_ms": 0})
+        self.assertEqual((skin.click_interval_ms, skin.stack_pause_ms), (5, 0))
 
     def test_bad_sample_is_discarded_as_a_whole(self):
         for invalid in (None, [], sample((0, 0, 0)), sample((True, 0, 0)),
