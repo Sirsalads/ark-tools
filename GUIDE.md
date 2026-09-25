@@ -385,8 +385,11 @@ lower point and repeats. You do not need to count your stacks or select them
 one by one. The macro finishes when the first slot has no matching dye for
 **three consecutive readings**.
 
-Keep the list filtered to the dye you captured: a different color will not
-match that reference. Partial stacks such as **x97** work too; the macro sends
+Use **Check the dye now** to see whether the slot is recognised before you
+start; it reads the screen with ARK in front and says how close the match is.
+If it is not recognised the macro still paints — it just will not know when to
+stop, and will say so. Keep the list filtered to the dye you captured: a
+different color will not match that reference. Partial stacks such as **x97** work too; the macro sends
 100 attempts before selecting again. It does **not** read the quantity with
 OCR, so its counter is click attempts, not a confirmed total of dyes consumed.
 

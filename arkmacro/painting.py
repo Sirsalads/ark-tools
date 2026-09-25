@@ -36,6 +36,22 @@ def valid_sample(sample: Any) -> bool:
             and any(any(colour) for colour in sample))
 
 
+def match_score(reference: Any, observed: Any) -> int:
+    """
+    How much of the remembered dye is still there, as a percentage.
+
+    The same arithmetic `matches_dye` decides on, kept apart so a refusal can
+    say how close it came. "The dye is absent" and "17 of 25 pixels agreed, one
+    short" are the same event, and only one of them can be acted on.
+    """
+    if not valid_sample(reference) or not valid_sample(observed):
+        return 0
+    matches = sum(max(abs(a - b) for a, b in zip(before, after))
+                  <= CHANNEL_TOLERANCE
+                  for before, after in zip(reference, observed))
+    return round(100 * matches / SAMPLE_COUNT)
+
+
 def matches_dye(reference: Any, observed: Any) -> bool:
     """Allow small lighting/streaming changes while rejecting an empty slot.
 

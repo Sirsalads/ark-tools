@@ -574,6 +574,15 @@ before the run finishes. The cursor stays away from the icon during those checks
 so a hover effect does not become the reference. A screen that cannot be read
 stops the run with a message; it is never counted as an empty slot.
 
+**A slot that never matched does not stop anything.** If the very first reading
+of a run fails — before a single click has gone out — the suspect is the
+captured reference, not the dye, so the macro says how close it came ("28% of
+the pixels agree, 70% needed") and **paints anyway**. It just cannot tell you
+when the dye runs out, so stop it yourself with `F4`. A check that could also
+veto starting made a bad capture look exactly like a macro that does not work.
+**Check the dye now** on the same card answers the question in one click,
+without farming for the answer.
+
 This checks the icon's color, so keep the list filtered to the captured dye.
 Another color is not recognized as another stack of that dye. Capture again if
 you change the color, move the game window, change the HUD or change resolution.

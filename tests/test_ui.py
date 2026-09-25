@@ -1290,6 +1290,113 @@ win._pull()
 win._log = quiet_log
 print("OK  every ignored press says why, a quick tap counts, and a capture arms it")
 
+# ------------------------- 23g2) a held key is one press, not thirty
+# Reported as "F4 does nothing": holding it started and stopped the macro about
+# thirty times a second, so nothing ever got as far as a click. The keyboard
+# repeats a held key and every repeat sets the tap bit, so the bit can widen
+# what counts as arriving but must never stand in for the edge itself.
+said.clear()
+repeat = {"bit": False, "down": False}
+w_module.key_tapped = lambda _vk: repeat["bit"]
+w_module.key_is_down = lambda vk: repeat["down"] and vk == 0x73
+win.sw_skin.switch.setChecked(True)
+win._pull()
+win._skin_was_down = False
+clicks.clear()
+
+repeat["down"] = True
+repeat["bit"] = True                       # the press itself
+win._watch_skin_key()
+assert win._sweep_timer.isActive(), "the press did not start it"
+starts = 1
+for _ in range(10):                        # ten auto-repeats of the same hold
+    repeat["bit"] = True                   # every repeat sets the bit again
+    win._watch_skin_key()
+    starts += 1 if win._sweep_timer.isActive() else 0
+assert win._sweep_timer.isActive(), "a held key toggled the macro back off"
+assert starts == 11, "the run did not survive the repeats intact"
+
+# releasing and pressing again is still a second press, and stops it
+repeat["down"] = False; repeat["bit"] = False
+win._watch_skin_key()
+assert win._sweep_timer.isActive(), "letting go stopped a toggled run"
+repeat["down"] = True; repeat["bit"] = True
+win._watch_skin_key()
+assert not win._sweep_timer.isActive(), "the second press did not stop it"
+repeat["down"] = False; repeat["bit"] = False
+win._watch_skin_key()
+
+# and a tap too quick for the poll — never down on any tick — still counts
+repeat["bit"] = True
+win._watch_skin_key()
+assert win._sweep_timer.isActive(), "a tap between two ticks was lost"
+win._stop_sweep()
+repeat["bit"] = False
+print("OK  a held key is one press however often the keyboard repeats it")
+
+# ------------------------- 23g3) a reference that never matched cannot veto
+# The dye check is there to say when to stop. Letting it also decide whether to
+# start means a bad capture is indistinguishable from a broken macro — which is
+# how this was reported. A slot that never matched is the reference's fault,
+# and clicking a slot that turns out to be empty costs nothing.
+w_module.key_is_down = lambda vk: activate["down"] and vk == 0x73
+w_module.key_tapped = lambda _vk: False
+w_module.screen_samples = lambda _points: empty_sample     # never matches
+noisy_log = win._log
+win._log = lambda message, level="info": said.append(f"{level}:{message}")
+clicks.clear(); said.clear()
+start_painting()
+for _ in range(3):
+    win._sweep_step()
+assert win._sweep_timer.isActive(), "a reference that never matched stopped it"
+assert win._skin_unverified, "it did not record that it is running unchecked"
+assert clicks == [dye_point], "it did not select the slot and carry on"
+assert any("does not look like the captured dye" in ln and "%" in ln
+           for ln in said), said
+assert "dye check off" in win.lbl_skin_progress.text(), \
+    win.lbl_skin_progress.text()
+for _ in range(100):
+    win._sweep_step()
+assert clicks.count(paint_point) == 100, "it never painted"
+# and it keeps going: with no working reference there is nothing to stop on
+win._sweep_step()
+assert win._sweep_timer.isActive() and clicks.count(dye_point) == 2
+win._stop_sweep()
+
+# but a reference that DID match, and then stops, is the dye running out
+w_module.screen_samples = lambda _points: dye_sample
+clicks.clear(); said.clear()
+start_painting()
+win._sweep_step()                                  # matches: selects
+for _ in range(100):
+    win._sweep_step()
+w_module.screen_samples = lambda _points: empty_sample
+for _ in range(3):
+    win._sweep_step()
+assert not win._sweep_timer.isActive(), "a used-up stack did not finish the run"
+assert not win._skin_unverified, "a real finish was blamed on the reference"
+assert any("painting finished" in ln for ln in said), said
+w_module.screen_samples = lambda _points: dye_sample
+
+# the check is also answerable on demand, without farming for the answer
+said.clear()
+win._check_dye()
+assert any("dye check" in ln and "matches what was captured" in ln
+           for ln in said), said
+w_module.screen_samples = lambda _points: empty_sample
+said.clear()
+win._check_dye()
+assert any("does NOT match" in ln and "%" in ln for ln in said), said
+w_module.screen_samples = lambda _points: dye_sample
+# and it refuses to read the app's own window instead of the game
+w_module.is_foreground = lambda _h: False
+said.clear()
+win._check_dye()
+assert any("bring ARK in front" in ln for ln in said), said
+w_module.is_foreground = lambda _h: True
+win._log = noisy_log
+print("OK  a bad reference paints and says so; a used-up stack still finishes")
+
 # ------------------------- 23h) the log outlives the window
 # Two rounds of "it does not work" arrived with nothing attached, while the
 # reason was sitting in a log that dies with the app. It is a file now.

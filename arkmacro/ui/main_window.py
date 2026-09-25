@@ -275,6 +275,9 @@ class MainWindow(QWidget):
         self._skin_stacks = 0
         self._skin_missing = 0
         self._skin_finished = False
+        # set when the dye check never recognised the slot: the run carries on
+        # without it rather than refusing to paint. See _skin_step.
+        self._skin_unverified = False
         # the last reason a sweep was refused, so hold modes — which ask on
         # every tick the key is down — say it once instead of 50 times a second
         self._refused = ""
@@ -961,14 +964,56 @@ class MainWindow(QWidget):
                 lambda _checked=False, a=attr: self._test_point(
                     *getattr(self.cfg.skin_overcap, a)))
             row.addWidget(button)
+        check = QPushButton("Check the dye now")
+        check.setCursor(Qt.PointingHandCursor)
+        check.clicked.connect(self._check_dye)
+        row.addWidget(check)
         card.add(row)
         self.lbl_skin_progress = hint_label("Ready to paint")
         card.add(self.lbl_skin_progress)
         card.add(hint_label(
-            "Three missing dye readings stop the macro. Keep ARK in front; "
-            "recapture if the dye colour, window position or resolution changes. "
-            "Farm and Drop cannot run at the same time as painting."))
+            "Keep ARK in front; recapture if the dye colour, window position or "
+            "resolution changes. If the check no longer recognises the slot the "
+            "macro paints anyway and says so — it just cannot tell you when the "
+            "dye has run out. Farm and Drop cannot run at the same time as "
+            "painting."))
         return card
+
+    def _check_dye(self) -> None:
+        """
+        Read the dye slot now and say how well it matches what was captured.
+
+        The check used to be answerable only by farming: press the key, watch
+        nothing happen, and be told the dye was "absent" with no number behind
+        it. This asks the same question the macro asks, at a moment when ARK is
+        on screen and you can see what it is looking at.
+        """
+        skin = self.cfg.skin_overcap
+        if not painting.ready(skin):
+            self._log("capture both points before checking the dye", "warn")
+            return
+        hwnd = w.find_window(self.cfg.target.window_title)
+        if not w.is_foreground(hwnd):
+            # the app is in front right now, so the reading would be of the app
+            self._log("bring ARK in front with Apply Dye open, then check — "
+                      "this reads the screen, so whatever is on top is what it "
+                      "sees", "warn")
+            return
+        read = w.screen_samples(painting.probe_points(skin.dye_point))
+        if not painting.valid_sample(read):
+            self._log("the dye pixels could not be read — ARK has to be "
+                      "borderless, not exclusive fullscreen", "err")
+            return
+        score = painting.match_score(skin.dye_sample, read)
+        if painting.matches_dye(skin.dye_sample, read):
+            self._log(f"dye check: the slot matches what was captured "
+                      f"({score}% of the pixels) — painting will stop on its "
+                      "own when the dye runs out", "ok")
+        else:
+            self._log(f"dye check: the slot does NOT match ({score}% of the "
+                      f"pixels agree, {painting.MATCH_PERCENT}% needed). "
+                      "Recapture with the dye in the first slot. Painting will "
+                      "still run, it just will not know when to stop", "warn")
 
     # ------------------------------------------------------- hold to drop
 
@@ -1791,14 +1836,24 @@ class MainWindow(QWidget):
         """
         (down, pressed) for one tick of watching a key.
 
-        `pressed` is the edge: a key that is down now and was not on the last
-        tick — or one that went down and came back up in between, which the
-        level alone cannot see and the tap bit can. The tap bit is read first
-        because reading the level clears it (winapi.key_tapped).
+        `pressed` is the edge, and the edge is `not was_down` — that part is
+        not negotiable. The tap bit only widens what counts as arriving: a key
+        that went down and came back up between two ticks is a press the level
+        alone never sees, and the bit remembers it.
+
+        It is ANDed with the edge rather than trusted on its own, which is the
+        bug this carries the scar of. Holding a key makes the keyboard repeat
+        it, every repeat sets the bit again, and a tap bit taken as a press by
+        itself turned one finger on F4 into thirty starts and stops a second —
+        measured at ten out of ten ticks. The tap bit says "it arrived", never
+        "it is still here".
+
+        The bit is read first because reading the level clears it
+        (winapi.key_tapped).
         """
         tapped = w.key_tapped(vk)
         down = w.key_is_down(vk)
-        return down, tapped or (down and not was_down)
+        return down, (down or tapped) and not was_down
 
     def _watch_keys(self) -> None:
         """One poll for both key-driven sweeps. They share the cursor."""
@@ -2060,6 +2115,7 @@ class MainWindow(QWidget):
         self._skin_stacks = 0
         self._skin_missing = 0
         self._skin_finished = False
+        self._skin_unverified = False
         self._sweep_return = w.get_cursor_pos()
         self._sweep_hwnd = w.find_window(self.cfg.target.window_title)
         # Read the lower icon with the cursor upstairs, clear of hover effects.
@@ -2184,9 +2240,19 @@ class MainWindow(QWidget):
                     self._log("skin overcap: dye pixels unavailable; recapture "
                               "with ARK visible and borderless", "err")
                     return
-                if not painting.matches_dye(skin.dye_sample, read):
+                if not (self._skin_unverified
+                        or painting.matches_dye(skin.dye_sample, read)):
                     self._skin_missing += 1
-                    if self._skin_missing >= 3:
+                    if self._skin_missing < 3:
+                        # look again, but give the list a moment to finish
+                        # redrawing first — see MISS_RETRY_MS
+                        self._sweep_timer.setInterval(
+                            max(self._skin_pause_ms(), MISS_RETRY_MS))
+                        return
+                    score = painting.match_score(skin.dye_sample, read)
+                    if self._skin_stacks:
+                        # it matched before and does not now: the stack that
+                        # was there has been used up, which is the whole point
                         self._stop_sweep()
                         self.lbl_skin_progress.setText(
                             f"Finished: captured dye no longer visible · "
@@ -2194,11 +2260,21 @@ class MainWindow(QWidget):
                         self._log("skin overcap: captured dye absent in three "
                                   "readings; painting finished", "ok")
                         return
-                    # look again, but give the list a moment to finish
-                    # redrawing first — see MISS_RETRY_MS
-                    self._sweep_timer.setInterval(
-                        max(self._skin_pause_ms(), MISS_RETRY_MS))
-                    return
+                    # It has never matched, so nothing has been painted and
+                    # nothing has been used up. The suspect is the reference,
+                    # not the slot — and refusing here is the worst answer
+                    # available: it is indistinguishable, from the chair, from
+                    # a macro that does not work at all, which is exactly how
+                    # it was reported. Clicking a slot that turns out to be
+                    # empty costs nothing, so it paints and says so.
+                    self._skin_unverified = True
+                    self._log(
+                        f"skin overcap: the first slot does not look like the "
+                        f"captured dye ({score}% of the pixels agree, "
+                        f"{painting.MATCH_PERCENT}% needed) — painting anyway, "
+                        "but it cannot tell when the dye runs out, so stop it "
+                        f"with «{skin.activate_key.upper()}». Recapture with "
+                        "the dye visible to get the check back", "warn")
                 self._skin_missing = 0
                 # the cursor is upstairs for the read, so this one click needs
                 # the pointer to arrive at the slot before it presses
@@ -2211,8 +2287,10 @@ class MainWindow(QWidget):
                 self._skin_clicks_in_stack = 0
                 self._skin_phase = "paint"
                 self._sweep_timer.setInterval(self._select_settle_ms())
+                unchecked = " · dye check off" if self._skin_unverified else ""
                 self.lbl_skin_progress.setText(
-                    f"Cycle {self._skin_stacks} · dye selected, painting")
+                    f"Cycle {self._skin_stacks} · dye selected, painting"
+                    f"{unchecked}")
                 return
             # No move: the cursor has not left the paint region since the phase
             # began. A move on every click is an extra input event for the game
