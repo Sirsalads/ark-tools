@@ -20,13 +20,14 @@ from PySide6.QtGui import QColor, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from arkmacro import config as config_module  # noqa: E402
+from arkmacro import painting as painting_module  # noqa: E402
 from arkmacro import stopsign  # noqa: E402
 from arkmacro import updater  # noqa: E402
 from arkmacro.config import Config  # noqa: E402
 from arkmacro.ui import icons  # noqa: E402
 from arkmacro.ui.backdrop import Backdrop, load_brand  # noqa: E402
 from arkmacro.ui.main_window import (APP_NAME, NAV, PAGE_DASHBOARD,  # noqa: E402
-                                     PAGE_DROP, PAGE_FARM, PAGE_LOG,
+                                     PAGE_DROP, PAGE_FARM,
                                      PAGE_OVERCAP, PAGE_SETTINGS,
                                      MainWindow, round_trip)
 from arkmacro.engine import MacroEngine  # noqa: E402
@@ -1427,6 +1428,96 @@ w_module.is_foreground = lambda _h: True
 win._log = noisy_log
 print("OK  a bad reference paints and says so; a used-up stack still finishes")
 
+# ------------------------- 23g4) a capture across the icon's edge is called out
+# The real failure behind three rounds of "it does not work": the dye point was
+# clicked on the boundary of the icon, so the remembered patch was part dye and
+# part slot background and the live check scored 12-56% against a dye that was
+# plainly there. Nothing about that is visible when you click.
+edge_sample = ([[85, 61, 47]] * 5
+               + [[176, 85, 80], [236, 82, 81], [139, 93, 89],
+                  [77, 58, 46], [111, 92, 76]]
+               + [[255, 0, 0]] * 3 + [[177, 117, 112], [81, 64, 52]]
+               + [[255, 0, 0]] * 4 + [[178, 0, 0]]
+               + [[255, 0, 0]] * 3 + [[204, 0, 0], [215, 0, 0]])
+said.clear()
+noisy_log = win._log
+win._log = lambda message, level="info": said.append(f"{level}:{message}")
+shot = QPixmap(400, 700)
+shot.fill(QColor(20, 22, 26))
+painter = QPainter(shot)
+for index, (x, y) in enumerate(painting_module.probe_points([190, 520])):
+    painter.fillRect(x, y, 1, 1, QColor(*edge_sample[index]))
+painter.end()
+win._shot = shot
+win._shot_origin = (0, 0)
+win._pick_kind = "skin"
+win._picking = True
+win._skin_pick_points = {"paint": [160, 320], "dye": [190, 520]}
+win._finish_pick()
+assert win.cfg.skin_overcap.dye_sample == edge_sample, "the capture was not kept"
+assert any("EDGE of the icon" in ln and ln.startswith("warn:") for ln in said), said
+assert not painting_module.dominated(win.cfg.skin_overcap.dye_sample)
+# and it keeps saying so on the page, because a config captured before this
+# check existed carries the bad patch already and nobody would recapture to
+# find that out
+win._refresh_skin_status()
+assert "EDGE of the icon" in win.lbl_skin_points.text(), win.lbl_skin_points.text()
+
+# the on-demand check names the capture as the cause, not the slot
+said.clear()
+w_module.screen_samples = lambda _points: [[30, 32, 38]] * 25
+win._check_dye()
+assert any("edge of the icon" in ln and ln.startswith("err:") for ln in said), said
+
+# a clean capture says nothing of the sort, and the check passes
+said.clear()
+clean = [[220, 25, 20]] * 25
+shot2 = QPixmap(400, 700)
+shot2.fill(QColor(220, 25, 20))
+win._shot = shot2
+win._picking = True
+win._skin_pick_points = {"paint": [160, 320], "dye": [190, 520]}
+win._finish_pick()
+assert painting_module.dominated(win.cfg.skin_overcap.dye_sample)
+assert not any("EDGE" in ln for ln in said), said
+win._refresh_skin_status()
+assert "EDGE" not in win.lbl_skin_points.text(), win.lbl_skin_points.text()
+w_module.screen_samples = lambda _points: clean
+said.clear()
+win._check_dye()
+assert any("matches what was captured" in ln for ln in said), said
+w_module.screen_samples = lambda _points: dye_sample
+win.cfg.skin_overcap.dye_sample = dye_sample
+win.cfg.skin_overcap.paint_point = list(paint_point)
+win.cfg.skin_overcap.dye_point = list(dye_point)
+win._log = noisy_log
+print("OK  a dye point on the icon's edge is named at capture, not discovered")
+
+# ------------------------- 23i) an unattended update never lands on a macro
+# "never on top of a running macro" was written for the farm engine and had
+# never been taught that the sweeps are macros too, with the cursor in hand.
+said.clear()
+win._log = lambda message, level="info": said.append(f"{level}:{message}")
+applied = []
+real_apply = win._apply_update
+win._apply_update = lambda: applied.append(True)
+win._auto_blocked = False
+win._update_held = False
+win.sw_skin.switch.setChecked(True)
+win._pull()
+start_painting()
+win._auto_apply()
+assert not applied, "an update restarted the app in the middle of painting"
+assert any("painting to stop" in ln for ln in said), said
+win._stop_sweep()
+said.clear()
+win._auto_apply()
+assert applied, "the update never went ahead once painting had stopped"
+win._apply_update = real_apply
+win._update_held = False
+win._log = noisy_log
+print("OK  updating on its own waits for a sweep, not just for the engine")
+
 # ------------------------- 23h) the log outlives the window
 # Two rounds of "it does not work" arrived with nothing attached, while the
 # reason was sitting in a log that dies with the app. It is a file now.
@@ -1704,7 +1795,6 @@ print("OK  the display check measures with itself hidden, and a background run "
 # raised on the way up goes to a stream that does not exist. A machine where the
 # app would not start showed a command window for a few seconds and then nothing
 # at all, forever, with the reason written to nowhere.
-import runpy  # noqa: E402
 import main as entry  # noqa: E402
 
 report = pathlib.Path(entry.CRASH_LOG)

@@ -113,4 +113,38 @@ status = updater.check()
 assert not status.ok and "resolve host" in status.error
 print("OK  an offline machine reports the network error")
 
+# ------------------------------------- 10) the worker always answers
+# A git call that says something unforeseen used to take the whole check down
+# with it: an exception inside QThread.run() emits `finished` and never the
+# signal the card is waiting on, so it read "checking..." for the rest of the
+# session with nothing in the log. Same silence as a macro that does nothing.
+answers = []
+
+
+def exploding(*_args, **_kwargs):
+    raise RuntimeError("git said something unexpected")
+
+
+for mode, attribute, signal_name in (("check", "check", "checked"),
+                                     ("apply", "apply", "applied")):
+    worker = updater.UpdateWorker(mode)
+    original = getattr(updater, attribute)
+    setattr(updater, attribute, exploding)
+    getattr(worker, signal_name).connect(lambda *a: answers.append(a))
+    worker.run()                  # run(), not start(): nothing to wait on
+    setattr(updater, attribute, original)
+
+assert len(answers) == 2, answers
+checked, applied = answers
+assert not checked[0].ok and "unexpected" in checked[0].error, checked
+assert applied[0] is False and "unexpected" in applied[1], applied
+print("OK  a git surprise is reported instead of dying inside the thread")
+
+# and the two counts survive git printing anything alongside them
+assert updater._counts("3\t7") == (3, 7)
+assert updater._counts("warning: redirecting\n2 5") == (2, 5)
+assert updater._counts("") == (0, 0)
+assert updater._counts("nothing numeric here") == (0, 0)
+print("OK  ahead/behind survives a noisy git")
+
 print("\nALL UPDATER TESTS PASSED")

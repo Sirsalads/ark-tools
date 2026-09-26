@@ -376,7 +376,10 @@ On **Overcap skin**, capture two points from the frozen screen:
 1. The **upper color region** you want to click repeatedly.
 2. The **colored center of the first dye icon** in the list below. Click the
    dye itself, away from the quantity text and slot border; this also captures
-   its color for the check that tells when it is gone.
+   its color for the check that tells when it is gone. **The middle matters**:
+   a point on the icon's edge remembers half dye and half background, and the
+   check never recognises it again. The app checks this as you capture and
+   says so on the page if the point needs moving.
 
 Capturing the two points switches the macro on. Return to ARK and press
 **`F4`**. It selects the first dye,

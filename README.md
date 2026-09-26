@@ -587,6 +587,14 @@ This checks the icon's color, so keep the list filtered to the captured dye.
 Another color is not recognized as another stack of that dye. Capture again if
 you change the color, move the game window, change the HUD or change resolution.
 
+**Click the middle of the colour, not its edge.** A patch taken across the
+icon's boundary is part dye and part slot background, and every pixel on that
+boundary changes with a highlight or a redraw — measured on a real capture, 3
+of its 25 pixels agreed with the patch's own middle and the live check then
+scored 12%, 32% and 56% against a dye that was plainly in the slot. Nothing
+about that is visible when you click, so the app now says so at capture time
+and on the Overcap skin page, and **Check the dye now** repeats it.
+
 **Partial stacks are supported.** A stack with 97 dyes still receives 100 click
 attempts before the next selection. There is no OCR of the quantity: the counter
 reports **click attempts**, not a verified number of dyes consumed. Clicks the

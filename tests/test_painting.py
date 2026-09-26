@@ -57,12 +57,37 @@ class DyeRecognitionTests(unittest.TestCase):
         self.assertFalse(painting.matches_dye(sample(), sample((169, 20, 10))))
         self.assertFalse(painting.matches_dye(sample(), sample((10, 70, 140))))
 
-    def test_eighteen_pixels_are_required_for_a_match(self):
+    def test_a_patch_of_one_colour_survives_a_minority_moving(self):
+        # A uniform capture is recognised while most of it still agrees. It
+        # used to need 18 of 25 pixels; a patch that is nearly all one colour
+        # is now also recognised by that colour, so a third of it can move —
+        # a highlight, a border, a quantity — without losing the dye.
         observed = sample()
-        observed[:7] = [[10, 70, 140] for _ in range(7)]
+        observed[:8] = [[10, 70, 140] for _ in range(8)]
         self.assertTrue(painting.matches_dye(sample(), observed))
-        observed[7] = [10, 70, 140]
+        self.assertLess(painting.match_score(sample(), observed),
+                        painting.MATCH_PERCENT)
+
+    def test_but_the_majority_moving_is_a_different_slot(self):
+        observed = sample()
+        observed[:13] = [[10, 70, 140] for _ in range(13)]
         self.assertFalse(painting.matches_dye(sample(), observed))
+
+    def test_a_capture_across_an_edge_gets_neither_path(self):
+        # The real one. This patch was taken on the boundary of a dye icon:
+        # brown slot background across the top, pure red across the bottom. Its
+        # middle belongs to neither half, so recognising it by that middle
+        # would match an emptied slot just as happily — and never stop the run.
+        edge = ([[85, 61, 47]] * 5 + [[176, 85, 80], [236, 82, 81],
+                                      [139, 93, 89], [77, 58, 46], [111, 92, 76]]
+                + [[255, 0, 0]] * 3 + [[177, 117, 112], [81, 64, 52]]
+                + [[255, 0, 0]] * 4 + [[178, 0, 0]]
+                + [[255, 0, 0]] * 3 + [[204, 0, 0], [215, 0, 0]])
+        self.assertEqual(len(edge), 25)
+        self.assertFalse(painting.dominated(edge))
+        self.assertTrue(painting.dominated(sample()))
+        # an empty slot must not pass just because the middles happen to agree
+        self.assertFalse(painting.matches_dye(edge, sample((204, 0, 0))))
 
     def test_a_dye_sequence_ends_when_the_last_icon_disappears(self):
         # A changing stack count is outside this patch. Replacement stacks of
@@ -199,6 +224,52 @@ class PaintingConfigTests(unittest.TestCase):
             with self.subTest(sample=invalid):
                 skin = self.load_skin({"paint_point": [1, 2], "dye_sample": invalid})
                 self.assertEqual(skin.dye_sample, [])
+
+
+class MedianRecognition(unittest.TestCase):
+    """The second way to recognise the dye. See painting.matches_dye."""
+
+    @staticmethod
+    def patch(colours, count):
+        """A reading of `colours`, `count` of them, padded to a full sample."""
+        out = list(colours)[:count]
+        return out + [list(colours[-1])] * (painting.SAMPLE_COUNT - len(out))
+
+    def test_a_patch_that_mostly_agrees_is_the_same_dye(self):
+        # A dye icon with some of its pixels moved — a highlight, a border, a
+        # quantity that changed as the stack went down. Per pixel this scores
+        # far under the bar; what the patch mostly is has not moved at all.
+        dye = self.patch([[88, 66, 50]], 25)
+        disturbed = ([[255, 255, 255]] * 10) + ([[88, 66, 50]] * 15)
+        self.assertLess(painting.match_score(dye, disturbed),
+                        painting.MATCH_PERCENT)
+        self.assertLessEqual(painting.median_apart(dye, disturbed),
+                             painting.CHANNEL_TOLERANCE)
+        self.assertTrue(painting.matches_dye(dye, disturbed))
+
+    def test_an_empty_slot_is_still_an_empty_slot(self):
+        # what the check exists for has to keep working: the panel behind a
+        # used-up stack is nothing like the dye that was on it
+        dye = self.patch([[220, 25, 20]], 25)
+        empty = self.patch([[30, 32, 38]], 25)
+        self.assertFalse(painting.matches_dye(dye, empty))
+        self.assertGreater(painting.median_apart(dye, empty),
+                           painting.CHANNEL_TOLERANCE)
+
+    def test_the_strict_path_still_answers_on_its_own(self):
+        dye = self.patch([[220, 25, 20]], 25)
+        same = self.patch([[224, 30, 18]], 25)
+        self.assertGreaterEqual(painting.match_score(dye, same),
+                                painting.MATCH_PERCENT)
+        self.assertTrue(painting.matches_dye(dye, same))
+
+    def test_the_middle_is_per_channel_and_not_one_of_the_samples(self):
+        sample = [[0, 100, 200], [50, 150, 0], [200, 0, 100]] + [[9, 9, 9]] * 22
+        self.assertEqual(painting.median_colour(sample), (9, 9, 9))
+        # a reading that cannot be trusted has no middle, and is never a match
+        self.assertIsNone(painting.median_colour([]))
+        self.assertEqual(painting.median_apart(sample, None), 255)
+        self.assertFalse(painting.matches_dye(sample, None))
 
 
 if __name__ == "__main__":

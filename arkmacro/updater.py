@@ -95,6 +95,19 @@ def local_state() -> Repo:
                 committed=committed, dirty=bool(porcelain))
 
 
+def _counts(line: str) -> tuple[int, int]:
+    """(ahead, behind) out of `rev-list --left-right --count`, or (0, 0).
+
+    git prints two integers separated by a tab. It also prints warnings to the
+    same stream on some configurations, and int() on one of those used to take
+    the update check down with it — see UpdateWorker.run.
+    """
+    numbers = [int(part) for part in line.split() if part.lstrip("-").isdigit()]
+    if len(numbers) < 2:
+        return 0, 0
+    return numbers[0], numbers[1]
+
+
 def check() -> Status:
     """Fetch and report how far behind the working copy is."""
     repo = local_state()
@@ -110,9 +123,7 @@ def check() -> Status:
                                f"HEAD...{repo.upstream}")
     if code != 0:
         return Status(error=error or f"no upstream branch {repo.upstream}")
-    parts = counts.split()
-    ahead = int(parts[0]) if parts else 0
-    behind = int(parts[1]) if len(parts) > 1 else 0
+    ahead, behind = _counts(counts)
 
     commits: list[tuple[str, str]] = []
     if behind:
@@ -170,8 +181,22 @@ class UpdateWorker(QThread):
         self.mode = mode
 
     def run(self) -> None:
-        if self.mode == "check":
-            self.checked.emit(check())
-        else:
-            ok, message = apply()
-            self.applied.emit(ok, message)
+        """
+        Always answer, even when git does something unforeseen.
+
+        This is a thread, so an exception here does not reach anybody: Qt emits
+        `finished` and the signal the UI is waiting on never arrives. The card
+        then reads "checking..." until the app is restarted, with nothing in the
+        log, which is the same shape of silence as a macro that does nothing.
+        """
+        try:
+            if self.mode == "check":
+                self.checked.emit(check())
+            else:
+                self.applied.emit(*apply())
+        except Exception as error:                      # noqa: BLE001
+            detail = f"{type(error).__name__}: {error}"
+            if self.mode == "check":
+                self.checked.emit(Status(error=detail))
+            else:
+                self.applied.emit(False, detail)

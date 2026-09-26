@@ -88,7 +88,19 @@ else:
     assert len(real) == 12, f"asked for 4x3, got {len(real)} pixels"
     assert all(len(px) == 3 and all(0 <= c <= 255 for c in px) for px in real), \
         real[:4]
-    assert w.screen_pixel(0, 0) == real[0], "the single read disagrees with the grab"
+    # The two paths have to agree, but they are two readings of a live desktop
+    # taken a moment apart — a clock, a caret or a notification repainting that
+    # pixel in between is not a disagreement, it is a different screen. So the
+    # grab is re-taken alongside the single read and the comparison is between
+    # the pair that saw the same frame. A real mismatch never settles.
+    for attempt in range(5):
+        single = w.screen_pixel(0, 0)
+        again = w.screen_region(0, 0, 4, 3)
+        if again is not None and single == again[0]:
+            break
+    else:
+        raise AssertionError(f"the single read disagrees with the grab: "
+                             f"{single} vs {again[0] if again else None}")
     for _ in range(200):                    # a leak here would exhaust GDI handles
         assert w.screen_region(0, 0, 4, 3) is not None
     print("..  screen_region reads the real desktop, 200 grabs without leaking")

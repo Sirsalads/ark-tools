@@ -1025,15 +1025,26 @@ class MainWindow(QWidget):
                       "borderless, not exclusive fullscreen", "err")
             return
         score = painting.match_score(skin.dye_sample, read)
+        apart = painting.median_apart(skin.dye_sample, read)
+        numbers = (f"{score}% of the pixels agree ({painting.MATCH_PERCENT}% "
+                   f"needed), middle colour {apart} off "
+                   f"({painting.CHANNEL_TOLERANCE} allowed)")
         if painting.matches_dye(skin.dye_sample, read):
-            self._log(f"dye check: the slot matches what was captured "
-                      f"({score}% of the pixels) — painting will stop on its "
-                      "own when the dye runs out", "ok")
-        else:
-            self._log(f"dye check: the slot does NOT match ({score}% of the "
-                      f"pixels agree, {painting.MATCH_PERCENT}% needed). "
-                      "Recapture with the dye in the first slot. Painting will "
-                      "still run, it just will not know when to stop", "warn")
+            self._log(f"dye check: the slot matches what was captured — "
+                      f"{numbers}. Painting will stop on its own when the dye "
+                      "runs out", "ok")
+            return
+        if not painting.dominated(skin.dye_sample):
+            self._log(
+                f"dye check: the slot does NOT match — {numbers}. The cause is "
+                "the capture, not the slot: the dye point sits on the edge of "
+                "the icon, so half of what it remembered is slot background "
+                "and those pixels change every frame. Capture again and click "
+                "the middle of the colour", "err")
+            return
+        self._log(f"dye check: the slot does NOT match — {numbers}. Recapture "
+                  "with the dye in the first slot. Painting will still run, it "
+                  "just will not know when to stop", "warn")
 
     # ------------------------------------------------------- hold to drop
 
@@ -1934,9 +1945,16 @@ class MainWindow(QWidget):
             self.lbl_skin_points.setText(
                 "Capture both points with a dye visible before starting.")
             return
-        self.lbl_skin_points.setText(
-            f"Painting: {tuple(skin.paint_point)} · First dye: "
-            f"{tuple(skin.dye_point)} · 100 clicks per cycle")
+        where = (f"Painting: {tuple(skin.paint_point)} · First dye: "
+                 f"{tuple(skin.dye_point)} · 100 clicks per cycle")
+        if not painting.dominated(skin.dye_sample):
+            # said here as well as at capture: a config carried over from
+            # before this check existed has the bad patch already in it, and
+            # its owner has no reason to capture again to find out
+            where += ("  ·  the dye point is on the EDGE of the icon — capture "
+                      "again and click the middle of the colour, or painting "
+                      "will not know when the dye runs out")
+        self.lbl_skin_points.setText(where)
 
     def _sweep_block(self) -> str:
         """Why a sweep cannot start right now, or "" when it can."""
@@ -2331,6 +2349,7 @@ class MainWindow(QWidget):
                             max(self._skin_pause_ms(), MISS_RETRY_MS))
                         return
                     score = painting.match_score(skin.dye_sample, read)
+                    apart = painting.median_apart(skin.dye_sample, read)
                     if self._skin_stacks:
                         # it matched before and does not now: the stack that
                         # was there has been used up, which is the whole point
@@ -2352,10 +2371,16 @@ class MainWindow(QWidget):
                     self._log(
                         f"skin overcap: the first slot does not look like the "
                         f"captured dye ({score}% of the pixels agree, "
-                        f"{painting.MATCH_PERCENT}% needed) — painting anyway, "
-                        "but it cannot tell when the dye runs out, so stop it "
-                        f"with «{skin.activate_key.upper()}». Recapture with "
-                        "the dye visible to get the check back", "warn")
+                        f"{painting.MATCH_PERCENT}% needed; its middle colour "
+                        f"is {apart} off, {painting.CHANNEL_TOLERANCE} allowed)"
+                        " — painting anyway, but it cannot tell when the dye "
+                        f"runs out, so stop it with "
+                        f"«{skin.activate_key.upper()}»"
+                        + (". The dye point sits on the EDGE of the icon: "
+                           "capture again and click the middle of the colour"
+                           if not painting.dominated(skin.dye_sample)
+                           else ". Recapture with the dye visible to get the "
+                                "check back"), "warn")
                 self._skin_missing = 0
                 # the cursor is upstairs for the read, so the pointer has to
                 # arrive at the slot and be seen there before it presses
@@ -3174,6 +3199,17 @@ class MainWindow(QWidget):
             self._log(f"painting points and dye captured — skin overcap is on. "
                       f"Press «{skin.activate_key.upper()}» with ARK in front "
                       "to start", "ok")
+            if not painting.dominated(skin.dye_sample):
+                # the one thing about a capture that cannot be seen by looking
+                # at it, and the reason a good-looking setup paints without
+                # ever knowing when to stop
+                self._log(
+                    "but that dye point sits on the EDGE of the icon — the "
+                    "patch it remembered is part dye and part slot background, "
+                    "and the boundary pixels change every frame, so the check "
+                    "will not recognise the dye later. Capture again and click "
+                    "the middle of the colour, away from the border, the "
+                    "quantity and the slot corner", "warn")
             return
         _x, _y, width, height = self._game_area()
         self.cfg.drop.points_resolution = [width, height]
@@ -3343,6 +3379,12 @@ class MainWindow(QWidget):
         if self.engine and self.engine.isRunning():
             busy = "the macro to stop"
             self._update_pending = True
+        elif self._sweep_timer.isActive():
+            # hold-to-drop and skin overcap are macros too, with the cursor in
+            # their hands. Restarting under one is the same interruption this
+            # is here to avoid, and it was only ever taught about the engine.
+            busy = ("painting to stop" if self._sweep_kind == "skin"
+                    else "the slot sweep to stop")
         elif self._picking:
             busy = "the point picker to close"
         if busy:
