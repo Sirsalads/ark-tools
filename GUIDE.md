@@ -393,13 +393,15 @@ different color will not match that reference. Partial stacks such as **x97** wo
 100 attempts before selecting again. It does **not** read the quantity with
 OCR, so its counter is click attempts, not a confirmed total of dyes consumed.
 
-Out of the box it clicks every **40 ms** — about 25 a second, four times what
-it used to manage — and moves between stacks in well under a second. The limit
-is **the game, not the app**: ARK reads its mouse once a frame, so clicks
-closer together than a frame get dropped instead of painted. Lower **Time
-between clicks** until your stacks stop shrinking, then go back up; raise
-**Pause before the next stack** if the dye list is slow to redraw. GeForce
-NOW's configured stream latency is added to the waits.
+Out of the box it clicks every **40 ms** — 25 a second — and the card shows
+the rate it is really getting, so you can tune with a number instead of a
+feeling. The limit is **the game, not the app**: ARK reads its mouse once a
+frame, and a click needs one frame with the button down and one with it up. So
+the floor is two frames — about **33 ms at 60 fps**, **17 ms at 120 fps** —
+and below that two clicks arrive as one long drag. Lower **Time between
+clicks** until the dye stops going down, then go back up; raise **Pause before
+the next stack** if the dye list is slow to redraw. GeForce NOW's configured
+stream latency is added to the waits.
 
 If the click counter climbs and your dye does not move, that is the symptom of
 clicking faster than ARK reads: the app counts attempts, it cannot see what

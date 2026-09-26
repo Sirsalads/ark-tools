@@ -78,6 +78,18 @@ PAINT_HOLD_MIN_MS = 4
 # After the cursor moves, before the click on the new spot: the UI has to see
 # the pointer arrive before it can see a press there.
 MOVE_SETTLE_MS = 40
+# After the button comes up on the dye slot, before the cursor leaves it. A
+# release and a move in the same millisecond can reach the game in the same
+# frame, and a press at one place with a release at another is not a click to
+# a UI, it is a drag — which on an inventory slot is how a stack gets picked up
+# and thrown on the floor instead of selected.
+RELEASE_SETTLE_MS = 80
+# The click counter on the card is redrawn no more often than this. It used to
+# be written on every click, and every write schedules a repaint of a card that
+# sits on a blurred drop shadow — work the event loop does between two ticks of
+# a timer that is trying to keep 40 ms. Nobody reads a number that changes 25
+# times a second anyway.
+PROGRESS_MS = 200
 # After selecting a dye, before the first click on the paint region. Selecting
 # is a UI state change the game applies on a later frame, and a paint click
 # that overtakes it is painting with nothing selected. Not a setting: it is
@@ -278,6 +290,12 @@ class MainWindow(QWidget):
         # set when the dye check never recognised the slot: the run carries on
         # without it rather than refusing to paint. See _skin_step.
         self._skin_unverified = False
+        # the left button is put down on one tick and lifted on the next, so
+        # the thread is never asleep holding it. Which means it can be down
+        # when something stops the run, and then it has to be lifted.
+        self._skin_button_down = False
+        self._skin_shown = 0.0
+        self._skin_started = 0.0
         # the last reason a sweep was refused, so hold modes — which ask on
         # every tick the key is down — say it once instead of 50 times a second
         self._refused = ""
@@ -917,11 +935,13 @@ class MainWindow(QWidget):
         sgrid.add("How it runs", self.cb_skin_mode)
         self.sp_skin_interval = spin(5, 2000, skin.click_interval_ms, " ms", 5)
         sgrid.add("Time between clicks", self.sp_skin_interval,
-                  "40 ms is about 25 clicks a second. The limit is the game, "
-                  "not the app: ARK reads its mouse once a frame, so clicks "
-                  "closer together than a frame are dropped rather than "
-                  "painted. Lower this until your stacks stop shrinking, then "
-                  "go back up")
+                  "40 ms is 25 clicks a second, and the card shows the rate it "
+                  "is really getting. The floor is two of ARK's frames, not "
+                  "anything in the app: the game reads its mouse once a frame, "
+                  "and a click needs a frame with the button down and a frame "
+                  "with it up, or two clicks read as one long drag. At 60 fps "
+                  "that is about 33 ms; at 120 fps, 17 ms. Lower it until the "
+                  "dye stops going down, then go back up")
         self.sp_skin_pause = spin(0, 5000, skin.stack_pause_ms, " ms", 50)
         sgrid.add("Pause before the next stack", self.sp_skin_pause,
                   "After the 100 clicks, before the first slot is read and the "
@@ -2109,13 +2129,19 @@ class MainWindow(QWidget):
         if not painting.ready(skin) or self._sweep_block():
             return
         self._sweep_kind = "skin"
-        self._skin_phase = "select"
+        self._skin_phase = "check"
         self._skin_clicks_in_stack = 0
         self._skin_total_clicks = 0
         self._skin_stacks = 0
         self._skin_missing = 0
         self._skin_finished = False
         self._skin_unverified = False
+        self._skin_button_down = False
+        self._skin_shown = 0.0
+        self._skin_started = time.monotonic()
+        # the painting timer reads the key from here on — see
+        # _skin_key_says_stop for why they must not both be running
+        self._hold_watch.stop()
         self._sweep_return = w.get_cursor_pos()
         self._sweep_hwnd = w.find_window(self.cfg.target.window_title)
         # Read the lower icon with the cursor upstairs, clear of hover effects.
@@ -2149,15 +2175,72 @@ class MainWindow(QWidget):
 
     def _paint_tick_ms(self) -> int:
         """
-        What to set the timer to so that clicks land one gap apart.
+        The gap between lifting the button and pressing it again.
 
-        The hold happens on this thread, so it is part of the period whether it
-        is counted or not: a 40 ms timer with a 20 ms press in the handler puts
-        61 ms between clicks, and the field then means nothing. It is taken off
-        here, so the number on screen is the number the game gets.
+        The press is held across a tick of its own rather than slept through,
+        so the period is this plus the hold, and the field is the period.
         """
         gap = self.cfg.skin_overcap.click_interval_ms
         return max(1, round(gap - self._paint_hold_ms()))
+
+    def _skin_press(self) -> None:
+        """Put the button down and hand the thread straight back."""
+        w.mouse_down("left")
+        self._skin_button_down = True
+        self._skin_phase = "release"
+        self._sweep_timer.setInterval(max(1, round(self._paint_hold_ms())))
+
+    def _skin_release(self) -> None:
+        """Lift the button. Whoever calls this owns the next interval."""
+        if self._skin_button_down:
+            w.mouse_up("left")
+            self._skin_button_down = False
+
+    def _skin_show_progress(self, force: bool = False) -> None:
+        """
+        The counter, at a rate a person can read. See PROGRESS_MS.
+
+        It carries the rate it is actually achieving, not the one that was
+        asked for. Those were 14 and 25 a second respectively for a whole
+        release, and the only way anyone could have known was to time a log
+        line against another one. It is also the number to watch while tuning
+        the gap: lower it, see whether this follows, and whether the dye keeps
+        going down.
+        """
+        now = time.monotonic()
+        if not force and (now - self._skin_shown) * 1000 < PROGRESS_MS:
+            return
+        self._skin_shown = now
+        unchecked = " · dye check off" if self._skin_unverified else ""
+        elapsed = now - self._skin_started
+        rate = (f" · {self._skin_total_clicks / elapsed:.0f}/s"
+                if elapsed > 1 and self._skin_total_clicks else "")
+        self.lbl_skin_progress.setText(
+            f"Cycle {self._skin_stacks} · {self._skin_clicks_in_stack}/100 "
+            f"clicks · {self._skin_total_clicks} total{rate}{unchecked}")
+
+    def _skin_key_says_stop(self) -> bool:
+        """
+        Whether the activation key has asked for this run to end.
+
+        Asked here, on the painting timer, and not only on the shared watcher —
+        because the watcher is switched off while this runs. Two timers on one
+        thread, both wanting 20 ms, with one of them putting the mouse button
+        down, cost 16 ms of every click: measured at 15.6 clicks a second with
+        the watcher running and 20.7 with it stopped. The paint tick is already
+        the fastest clock in the app, so it is the one that should be reading
+        the key.
+        """
+        skin = self.cfg.skin_overcap
+        vk = w.vk_from_name(skin.activate_key)
+        if vk is None:
+            return True
+        if skin.mode == "hold":
+            self._skin_was_down = w.key_is_down(vk)
+            return not self._skin_was_down
+        down, pressed = self._key_edge(vk, self._skin_was_down)
+        self._skin_was_down = down
+        return pressed
 
     def _begin_sweep(self, path: list[tuple[int, int]], dwell: int,
                      message: str) -> None:
@@ -2223,16 +2306,14 @@ class MainWindow(QWidget):
                 or (self.engine is not None and self.engine.isRunning())):
             self._stop_sweep()
             return
-        if skin.mode == "hold":
-            vk = w.vk_from_name(skin.activate_key)
-            if vk is None or not w.key_is_down(vk):
-                self._stop_sweep()
-                return
+        if self._skin_key_says_stop():
+            self._stop_sweep()
+            return
         if not w.is_foreground(self._sweep_hwnd):
             self._stop_sweep()
             return
         try:
-            if self._skin_phase == "select":
+            if self._skin_phase == "check":
                 read = w.screen_samples(painting.probe_points(skin.dye_point))
                 if not painting.valid_sample(read):
                     self._stop_sweep()
@@ -2276,35 +2357,58 @@ class MainWindow(QWidget):
                         f"with «{skin.activate_key.upper()}». Recapture with "
                         "the dye visible to get the check back", "warn")
                 self._skin_missing = 0
-                # the cursor is upstairs for the read, so this one click needs
-                # the pointer to arrive at the slot before it presses
-                w.click_at(*skin.dye_point, "left", hold=PAINT_HOLD_MS / 1000.0,
-                           settle=MOVE_SETTLE_MS / 1000.0)
-                # and then back to the paint region, once: from here every
-                # click of the stack lands on a cursor that is already there
+                # the cursor is upstairs for the read, so the pointer has to
+                # arrive at the slot and be seen there before it presses
+                w.move_cursor(*skin.dye_point)
+                self._skin_phase = "pick"
+                self._sweep_timer.setInterval(MOVE_SETTLE_MS)
+                return
+
+            if self._skin_phase == "pick":
+                w.mouse_down("left")
+                self._skin_button_down = True
+                self._skin_phase = "picked"
+                self._sweep_timer.setInterval(PAINT_HOLD_MS)
+                return
+
+            if self._skin_phase == "picked":
+                self._skin_release()
+                # the release has to land on the slot before the cursor leaves
+                # it, or the game reads a drag and throws the stack away
+                self._skin_phase = "leave"
+                self._sweep_timer.setInterval(RELEASE_SETTLE_MS)
+                return
+
+            if self._skin_phase == "leave":
+                # back to the paint region, once per stack: from here every
+                # click lands on a cursor that is already there
                 w.move_cursor(*skin.paint_point)
                 self._skin_stacks += 1
                 self._skin_clicks_in_stack = 0
-                self._skin_phase = "paint"
+                self._skin_phase = "press"
                 self._sweep_timer.setInterval(self._select_settle_ms())
                 unchecked = " · dye check off" if self._skin_unverified else ""
                 self.lbl_skin_progress.setText(
                     f"Cycle {self._skin_stacks} · dye selected, painting"
                     f"{unchecked}")
                 return
-            # No move: the cursor has not left the paint region since the phase
-            # began. A move on every click is an extra input event for the game
-            # to chew through, and it is the clicks that paint.
-            w.click("left", hold=self._paint_hold_ms() / 1000.0)
+
+            if self._skin_phase == "press":
+                # No move: the cursor has not left the paint region since the
+                # stack began. A move on every click is another input event for
+                # the game to chew through, and it is the clicks that paint.
+                self._skin_press()
+                return
+
+            self._skin_release()
             self._skin_clicks_in_stack += 1
             self._skin_total_clicks += 1
-            self.lbl_skin_progress.setText(
-                f"Cycle {self._skin_stacks} · {self._skin_clicks_in_stack}/100 "
-                f"clicks · {self._skin_total_clicks} total")
+            self._skin_show_progress()
             if self._skin_clicks_in_stack >= painting.CLICKS_PER_STACK:
-                self._skin_phase = "select"
+                self._skin_phase = "check"
                 self._sweep_timer.setInterval(self._skin_pause_ms())
             else:
+                self._skin_phase = "press"
                 self._sweep_timer.setInterval(self._paint_tick_ms())
         except Exception as error:
             self._stop_sweep()
@@ -2324,14 +2428,31 @@ class MainWindow(QWidget):
         self._skin_phase = ""
         if kind == "skin":
             self._skin_finished = True
+            # the button is put down on one tick and lifted on the next, so a
+            # stop can land between the two. Leaving it down would hand the
+            # player a mouse that is holding itself.
+            self._skin_release()
+            # and the shared watcher gets the key back (see
+            # _skin_key_says_stop). Primed, so a key still held from the press
+            # that stopped this run does not read as a press to start another.
+            self._skin_was_down = self._prime_key(
+                self.cfg.skin_overcap.activate_key)
+            self._hold_was_down = self._prime_key(
+                self.cfg.hold_drop.key if self.cfg.hold_drop.mode == "manual"
+                else self.cfg.hold_drop.activate_key)
+            if self._hold_watching or self._skin_watching:
+                self._hold_watch.start()
         if self._sweep_return is not None:
             w.move_cursor(*self._sweep_return)
             self._sweep_return = None
         if not active:
             return
         if kind == "skin":
+            ran = max(time.monotonic() - self._skin_started, 0.001)
             message = (f"skin overcap: stopped after {self._skin_total_clicks} "
-                       f"painting clicks in {self._skin_stacks} cycles")
+                       f"painting clicks in {self._skin_stacks} cycles "
+                       f"({self._skin_total_clicks / ran:.0f} clicks a second "
+                       f"over {ran:.0f}s)")
             self.lbl_skin_progress.setText(message)
         else:
             laps = self._sweep_index / max(len(self._sweep_path), 1)

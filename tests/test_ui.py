@@ -855,7 +855,34 @@ def _clicked_at(x, y, *_args, **_kwargs):
 
 w_module.move_cursor = _moved
 w_module.click_at = _clicked_at
-w_module.click = lambda *_args, **_kwargs: clicks.append(at["pos"])
+
+
+def _press(*_args, **_kwargs):
+    at["down"] = True
+
+
+def _release(*_args, **_kwargs):
+    # A click is what the game sees, and what it sees is the release: the
+    # button goes down on one tick and comes up on the next, so counting the
+    # press would count clicks a stop landed in the middle of.
+    at["down"] = False
+    clicks.append(at["pos"])
+
+
+w_module.mouse_down = _press
+w_module.mouse_up = _release
+
+
+def deliver(n=1):
+    """Run the machine until `n` more clicks have reached the game."""
+    target = len(clicks) + n
+    for _ in range(n * 3 + 16):
+        if len(clicks) >= target:
+            return
+        win._sweep_step()
+    raise AssertionError(f"{len(clicks) + n - target} of {n} clicks landed")
+
+
 activate = {"down": False}
 w_module.key_is_down = lambda vk: activate["down"] and vk == 0x73    # F4
 paint_point, dye_point = (160, 320), (190, 520)
@@ -898,28 +925,35 @@ def start_painting():
 
 # Start only positions the cursor. A screen check and first-slot selection
 # precede painting, including when the player's first stack is already partial.
+from arkmacro.ui.main_window import (RELEASE_SETTLE_MS,  # noqa: E402
+                                     SELECT_SETTLE_MS)
 start_painting()
 assert clicks == [], "starting painted before confirming the dye was present"
-win._sweep_step()
+deliver(1)                          # check, move onto the slot, press, lift
 assert clicks == [dye_point], clicks
+# the release has to land on the slot before the cursor leaves it: a press in
+# one place and a release in another is a drag, and dragging an inventory slot
+# is how a stack ends up on the floor instead of selected
+assert win._sweep_timer.interval() == RELEASE_SETTLE_MS
+assert moves[-1] == dye_point, "the cursor left the slot before the release"
+win._sweep_step()                   # only now back to the paint region
+assert moves[-1] == paint_point
 # selecting is a UI state change the game applies on a later frame, so the
 # first paint click waits it out rather than overtaking it
-from arkmacro.ui.main_window import SELECT_SETTLE_MS  # noqa: E402
 assert win._sweep_timer.interval() == SELECT_SETTLE_MS
-for _ in range(100):
-    win._sweep_step()
+deliver(100)
 assert clicks == [dye_point] + [paint_point] * 100, \
     "one stack must receive exactly 100 paint clicks before changing stacks"
 assert win._skin_total_clicks == 100
 # and after the 100th click the only pause of the cycle, the one that was set
 assert win._sweep_timer.interval() == win.cfg.skin_overcap.stack_pause_ms
-win._sweep_step()
+deliver(1)
 assert clicks[-1] == dye_point and clicks.count(dye_point) == 2
-win._sweep_step()
+deliver(1)
 assert clicks[-1] == paint_point
-# the press is part of the period, so the timer holds what is left of the gap
-assert win._sweep_timer.interval() == win._paint_tick_ms()
-assert win._paint_tick_ms() + win._paint_hold_ms() ==     win.cfg.skin_overcap.click_interval_ms, "the field is not the real pace"
+# the press is held across a tick of its own, so the two together are the gap
+assert win._paint_tick_ms() + win._paint_hold_ms() == (
+    win.cfg.skin_overcap.click_interval_ms), "the field is not the real pace"
 assert not taps and not downs and not ups, "painting sent keyboard input"
 
 # Toggle presses are edges, not a key held over several watcher ticks.
@@ -953,12 +987,10 @@ def paint_inventory(point):
 
 # the dye slot is clicked at a coordinate; the paint region is clicked wherever
 # the cursor was left, which is the whole point of moving it only once
-w_module.click_at = lambda x, y, *_a, **_k: (_moved(x, y),
-                                             paint_inventory((x, y)))
-w_module.click = lambda *_a, **_k: paint_inventory(at["pos"])
+w_module.mouse_up = lambda *_a, **_k: paint_inventory(at["pos"])
 w_module.screen_samples = lambda _points: dye_sample if remaining else empty_sample
 start_painting()
-for _ in range(400):
+for _ in range(1600):
     if not win._sweep_timer.isActive():
         break
     win._sweep_step()
@@ -970,8 +1002,7 @@ assert not taps and not downs and not ups, "the old Shift/hotbar chord survived"
 print("OK  two full stacks and a partial stack are consumed and then stop")
 
 # ------------------------- 23c) an empty reading must settle, a failed read stops
-w_module.click_at = _clicked_at
-w_module.click = lambda *_args, **_kwargs: clicks.append(at["pos"])
+w_module.mouse_up = _release
 clicks.clear()
 w_module.screen_samples = lambda _points: empty_sample
 start_painting()
@@ -982,10 +1013,9 @@ for _ in range(2):
 assert not clicks, "an empty slot was selected"
 # Seeing a dye again resets the empty streak and allows that stack to paint.
 w_module.screen_samples = lambda _points: dye_sample
-win._sweep_step()
+deliver(1)
 assert clicks == [dye_point]
-for _ in range(100):
-    win._sweep_step()
+deliver(100)
 w_module.screen_samples = lambda _points: empty_sample
 for _ in range(2):
     win._sweep_step()
@@ -1009,30 +1039,24 @@ print("OK  empty frames are retried with a wait; an unreadable screen stops")
 # and never two of them overlapping into a drag.
 from arkmacro.ui.main_window import (MISS_RETRY_MS, MOVE_SETTLE_MS,  # noqa: E402
                                      PAINT_HOLD_MIN_MS, PAINT_HOLD_MS)
-holds: list[tuple] = []
-w_module.click = lambda *_a, hold=0.0, **_k: (
-    clicks.append(at["pos"]), holds.append(hold))
-w_module.click_at = lambda x, y, *_a, hold=0.0, settle=0.0, **_k: (
-    _clicked_at(x, y), holds.append((hold, settle)))
 win.sp_skin_interval.setValue(40)
 win.sp_skin_pause.setValue(150)
 win._pull()
-clicks.clear(); holds.clear(); moves.clear()
+clicks.clear(); moves.clear()
 start_painting()
-win._sweep_step()                            # select
+# the whole stack change, tick by tick, and what each one is waiting for
+for phase, waits in (("check", MOVE_SETTLE_MS), ("pick", PAINT_HOLD_MS),
+                     ("picked", RELEASE_SETTLE_MS), ("leave", SELECT_SETTLE_MS)):
+    assert win._skin_phase == phase, (win._skin_phase, phase)
+    win._sweep_step()
+    assert win._sweep_timer.interval() == waits, (phase, waits)
 assert clicks == [dye_point]
-# the pointer has to arrive at the slot before it is pressed, and the press is
-# a real one — this is the click the whole run depends on
-assert holds[-1] == (PAINT_HOLD_MS / 1000.0, MOVE_SETTLE_MS / 1000.0), holds[-1]
 assert moves[-1] == paint_point, "the cursor did not return to the paint region"
-assert win._sweep_timer.interval() == SELECT_SETTLE_MS
 
 moves.clear()
-for _ in range(100):
-    win._sweep_step()
+deliver(100)
 assert clicks == [dye_point] + [paint_point] * 100, "a click missed the region"
 assert not moves, "the cursor was moved again during the stack"
-assert all(h == PAINT_HOLD_MS / 1000.0 for h in holds[1:]), holds[1:]
 assert win._sweep_timer.interval() == 150, win._sweep_timer.interval()
 # an empty reading is spaced out whatever the pause says: the three misses that
 # end a run have to span a redraw, or one blank frame ends it early
@@ -1047,27 +1071,33 @@ win._stop_sweep()
 for gap, hold_ms in ((5, 2.5), (30, 15), (2000, PAINT_HOLD_MS)):
     win.sp_skin_interval.setValue(gap)
     win._pull()
-    clicks.clear(); holds.clear()
+    clicks.clear()
     start_painting()
-    win._sweep_step()                        # select
-    win._sweep_step()                        # paint
-    assert clicks.count(paint_point) == 1, (gap, clicks)
+    deliver(1)                               # the dye click
+    win._sweep_step()                        # leave
     held_ms = max(PAINT_HOLD_MIN_MS, hold_ms)
-    assert holds[-1] == held_ms / 1000.0, (gap, holds[-1])
+    assert win._paint_hold_ms() == held_ms, (gap, win._paint_hold_ms())
     assert held_ms <= gap / 2 or gap < 2 * PAINT_HOLD_MIN_MS, gap
-    # the press happens on this thread, so the timer carries the rest of the
-    # period: what the field asks for is what lands, not the field plus a press
+    win._sweep_step()                        # press: the button goes down
+    assert win._skin_button_down, gap
+    assert win._sweep_timer.interval() == max(1, round(held_ms)), gap
+    win._sweep_step()                        # release: and comes back up
+    assert not win._skin_button_down, gap
+    assert clicks.count(paint_point) == 1, (gap, clicks)
+    # the press and the gap after it add up to what the field asks for
     assert win._sweep_timer.interval() == max(1, round(gap - held_ms)), gap
+    # and a stop landing between the two must not leave the button held
+    win._sweep_step()
+    assert win._skin_button_down
     win._stop_sweep()
+    assert not win._skin_button_down, "a stop left the mouse holding itself"
 # and the field itself cannot be taken below the floor
 win.sp_skin_interval.setValue(0)
 assert win.sp_skin_interval.value() == 5, win.sp_skin_interval.value()
 win.sp_skin_interval.setValue(80)
 win.sp_skin_pause.setValue(500)
 win._pull()
-w_module.click = lambda *_args, **_kwargs: clicks.append(at["pos"])
-w_module.click_at = _clicked_at
-print("OK  one click a tick, held like a frame, landing where the cursor is")
+print("OK  press and release are separate ticks, and no stop holds the button")
 
 # ------------------------- 23d) focus, panic and hold release stop before clicking
 for leave in ("focus", "panic", "close", "farm", "picker"):
@@ -1347,19 +1377,20 @@ win._log = lambda message, level="info": said.append(f"{level}:{message}")
 clicks.clear(); said.clear()
 start_painting()
 for _ in range(3):
-    win._sweep_step()
+    win._sweep_step()                   # three readings, none of them a match
 assert win._sweep_timer.isActive(), "a reference that never matched stopped it"
 assert win._skin_unverified, "it did not record that it is running unchecked"
+deliver(1)
 assert clicks == [dye_point], "it did not select the slot and carry on"
 assert any("does not look like the captured dye" in ln and "%" in ln
            for ln in said), said
-assert "dye check off" in win.lbl_skin_progress.text(), \
-    win.lbl_skin_progress.text()
-for _ in range(100):
-    win._sweep_step()
+win._sweep_step()                       # leave: the card says it is unchecked
+assert "dye check off" in win.lbl_skin_progress.text(), (
+    win.lbl_skin_progress.text())
+deliver(100)
 assert clicks.count(paint_point) == 100, "it never painted"
 # and it keeps going: with no working reference there is nothing to stop on
-win._sweep_step()
+deliver(1)
 assert win._sweep_timer.isActive() and clicks.count(dye_point) == 2
 win._stop_sweep()
 
@@ -1367,9 +1398,8 @@ win._stop_sweep()
 w_module.screen_samples = lambda _points: dye_sample
 clicks.clear(); said.clear()
 start_painting()
-win._sweep_step()                                  # matches: selects
-for _ in range(100):
-    win._sweep_step()
+deliver(1)                                         # matches: selects
+deliver(100)
 w_module.screen_samples = lambda _points: empty_sample
 for _ in range(3):
     win._sweep_step()

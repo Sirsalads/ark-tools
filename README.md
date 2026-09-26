@@ -594,14 +594,18 @@ game misses cost nothing: a remaining stack is simply selected again.
 
 ### Timing and stopping
 
-- **Time between clicks** defaults to **40 ms**, about 25 clicks a second, and
-  it is the real period: the press is counted inside it, so the number on the
-  field is the number the game gets. **The ceiling here is ARK, not the app.**
-  The game reads its mouse once a frame — 16.7 ms at 60 fps — so clicks closer
-  together than a frame are dropped rather than painted, and the button is
-  held about a frame for the same reason. A build that clicked every 2.5 ms
-  painted nothing at all. Lower this until your stacks stop shrinking, then go
-  back up.
+- **Time between clicks** defaults to **40 ms**, 25 clicks a second, and it is
+  the real period: the button goes down on one timer tick and up on the next,
+  so nothing is slept through and the number on the field is the number the
+  game gets. Measured: 40 ms asked, 41.5 ms delivered; 25 ms asked, 25.3 ms
+  delivered.
+  **The floor is two of ARK's frames, not anything in the app.** The game reads
+  its mouse once a frame, and a click needs one frame with the button down and
+  one with it up — squeeze them and two clicks read as one long drag instead.
+  At 60 fps that floor is about **33 ms**; at 120 fps, **17 ms**. A build that
+  clicked every 2.5 ms painted nothing at all.
+  **The card shows the rate it is actually achieving**, so lower this until the
+  dye stops going down, then go back up.
 - **Pause before the next stack** defaults to **150 ms**, after the 100 clicks
   and before the first slot is read. Raise it if the dye list is slow to
   redraw. Selecting a dye then waits a further quarter second, which is not a
